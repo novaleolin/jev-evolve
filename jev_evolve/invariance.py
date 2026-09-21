@@ -336,3 +336,187 @@ def state_sensitivity(policy: Policy, backend: Backend, tasks: Sequence,
         n=len(tasks), k=k, flips=flips(padded), control_flips=flips(ctrl),
         base_score=ctrl[0].score if score else 0.0,
         padded_scores=[r.score for r in padded] if score else [])
+
+
+# ------------------------------------------------- salient distractors
+
+
+@dataclass
+class SalienceSensitivity:
+    """Do the new errors concentrate on the injected distractor?
+
+    The concentration is the whole measurement. Adding text to an input can
+    simply degrade a decision, and then the new errors spread across the
+    wrong labels. Capture means they land on the distractor far more often
+    than that, and the two make different predictions, so reporting only the
+    accuracy drop cannot tell them apart.
+    """
+
+    n: int
+    base_score: float
+    perturbed_score: float
+    newly_wrong: int
+    to_distractor: int
+    fixed: int = 0
+    base_wrong: int = 0
+    base_wrong_to_distractor: int = 0
+    options: int = 0
+
+    @property
+    def cost(self) -> float:
+        return self.base_score - self.perturbed_score
+
+    @property
+    def share(self) -> float:
+        return self.to_distractor / self.newly_wrong if self.newly_wrong else 0.0
+
+    @property
+    def matched_control(self) -> float:
+        """How often the model names the distractor label WITHOUT the
+        injection, among the answers it already gets wrong.
+
+        This is the number the share has to beat. The theoretical 1/(m-1) is
+        not this model's behaviour: a model with a favourite label would hit
+        any given one more often than chance, and would look like capture.
+        The distractor is assigned independently of the model, so its
+        unperturbed error rate is the right baseline.
+        """
+        if not self.base_wrong:
+            return 1.0 / (self.options - 1) if self.options > 1 else 0.0
+        return self.base_wrong_to_distractor / self.base_wrong
+
+    @property
+    def ratio(self) -> float:
+        m = self.matched_control
+        return (self.share / m) if m else 0.0
+
+    @property
+    def p_value(self) -> float:
+        """One-sided exact binomial tail against the matched control."""
+        from math import comb
+        q = self.matched_control
+        if not self.newly_wrong or not 0 < q < 1:
+            return 1.0
+        return sum(comb(self.newly_wrong, i) * q ** i
+                   * (1 - q) ** (self.newly_wrong - i)
+                   for i in range(self.to_distractor, self.newly_wrong + 1))
+
+    @property
+    def captured(self) -> bool:
+        return (self.newly_wrong >= 8 and self.ratio >= 2.0
+                and self.p_value < 0.01)
+
+    def report(self) -> str:
+        L = [f"  accuracy, clean          {self.base_score:.3f}",
+             f"  accuracy, distractor in  {self.perturbed_score:.3f}"
+             f"   ({-self.cost:+.3f})",
+             f"  answers it broke         {self.newly_wrong}"
+             f"   (and {self.fixed} it happened to fix)",
+             f"    landed on the distractor  {self.to_distractor}"
+             f"   ({self.share:.1%})",
+             f"    this model's own rate     {self.matched_control:.1%}"
+             f"   ({self.base_wrong} clean errors)",
+             f"    -> {self.ratio:.1f}x   p={self.p_value:.2e}", ""]
+        if self.captured:
+            L.append("  CAPTURED: the errors concentrate on the distractor, so")
+            L.append("  this is not general degradation from the extra text.")
+        elif self.newly_wrong < 8:
+            L.append("  TOO FEW ERRORS to tell capture from degradation.")
+        else:
+            L.append("  NOT CAPTURED: the new errors are spread, which is what")
+            L.append("  ordinary degradation from extra input looks like.")
+        return "\n".join(L)
+
+    def __str__(self) -> str:
+        return self.report()
+
+
+def quote_prior(field: str, examples_by_label: dict, frames=None):
+    """An injector that quotes a real input belonging to a different label.
+
+    Builds the perturbed state by prefixing a quoted message that is marked
+    as already resolved, so the gold label is unchanged: what happened before
+    and was settled does not change where the live request belongs.
+
+    Quoting rather than splicing is deliberate. Real utterances are whole
+    sentences carrying their own punctuation, and dropping one into a
+    subordinate clause produced sentences that contradicted the frame, which
+    would have made the probe measure broken grammar instead.
+    """
+    frames = frames or [
+        'Last month I wrote: "{b}" That was resolved. Today I need something'
+        ' else: {a}',
+        'Earlier I asked you: "{b}" Your team closed that one. Separate'
+        ' request: {a}',
+        'A while back my message was: "{b}" It is fully handled now. New'
+        ' question: {a}',
+        'Previously I contacted you about this: "{b}" Settled since.'
+        ' Unrelated: {a}',
+    ]
+
+    def inject(state: dict, label, rng: random.Random):
+        others = [k for k, v in examples_by_label.items() if k != label and v]
+        if not others or field not in state:
+            return None, None
+        d = rng.choice(others)
+        b = rng.choice(examples_by_label[d])
+        frame = rng.choice(frames)
+        return (dict(state, **{field: frame.format(b=str(b).strip(),
+                                                   a=state[field])}), d)
+    return inject
+
+
+def salience_sensitivity(policy: Policy, backend: Backend, tasks: Sequence,
+                         inject, score, seed: int = 0, act=None,
+                         route=None) -> SalienceSensitivity:
+    """Inject a salient distractor and see whether the errors concentrate.
+
+    `inject(state, label, rng) -> (new_state, distractor_label)` is yours, and
+    must preserve the gold label. `quote_prior` is a ready-made one for text
+    classification. Returning `(None, None)` skips an item.
+
+    Run this after the ordering and state checks pass. A schema whose answers
+    already move under permutation will produce a capture number read off
+    that noise.
+    """
+    from .evolve import run_policy
+
+    rng = random.Random(seed)
+    base, pert, distract = [], [], []
+    for t in tasks:
+        if isinstance(t, dict):
+            tid, st, lab = t.get("id"), t["state"], t.get("label")
+        else:
+            tid, st, lab = t[0], t[1], (t[2] if len(t) > 2 else None)
+        new_st, d = inject(st, lab, rng)
+        if new_st is None:
+            continue
+        base.append((tid, dict(st), lab))
+        pert.append((tid, new_st, lab))
+        distract.append(d)
+
+    b = run_policy(policy, backend, base, score, act, route)
+    p = run_policy(policy, backend, pert, score, act, route)
+
+    def pick(ep):
+        got = [d for d in ep.decisions if d.probabilities]
+        return got[-1].choice if got else None
+
+    newly_wrong = to_d = fixed = base_wrong = base_wrong_to_d = 0
+    for eb, ep, d in zip(b, p, distract):
+        gold, pb, pp = eb.label, pick(eb), pick(ep)
+        if pb != gold:
+            base_wrong += 1
+            base_wrong_to_d += int(pb == d)
+        if pb == gold and pp != gold:
+            newly_wrong += 1
+            to_d += int(pp == d)
+        elif pb != gold and pp == gold:
+            fixed += 1
+
+    opts = max((len(pt.options) for pt in policy.points.values()), default=0)
+    return SalienceSensitivity(
+        n=len(base), base_score=b.score, perturbed_score=p.score,
+        newly_wrong=newly_wrong, to_distractor=to_d, fixed=fixed,
+        base_wrong=base_wrong, base_wrong_to_distractor=base_wrong_to_d,
+        options=opts)

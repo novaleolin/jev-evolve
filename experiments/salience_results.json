@@ -1,0 +1,18 @@
+{
+  "backend": "Qwen/Qwen2.5-0.5B-Instruct",
+  "k": 8,
+  "pairs": 192,
+  "base": 0.6197916666666666,
+  "perturbed": 0.4947916666666667,
+  "options": 8,
+  "newly_wrong": 29,
+  "fixed": 5,
+  "to_distractor": 19,
+  "elsewhere": 10,
+  "share_to_distractor": 0.6551724137931034,
+  "expected_if_random": 0.14285714285714285,
+  "matched_control": 0.1506849315068493,
+  "base_wrong": 73,
+  "ratio_vs_matched": 4.347962382445141,
+  "p_value": 1.0362698502286647e-09
+}

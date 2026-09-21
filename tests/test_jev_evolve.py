@@ -423,3 +423,59 @@ def test_padding_never_touches_the_caller_s_tasks():
                                  tasks, acc, k=2)
     after = [s for _i, s, _l in tasks]
     assert before == after
+
+
+def test_salience_check_separates_capture_from_plain_degradation():
+    """A backend that cannot see the injected text must never be reported as
+    captured, however much the injection costs it."""
+    class ReadsOnlyChannel:
+        """Answers from a field the injector never touches, so the injection
+        is invisible to it and its errors cannot concentrate anywhere."""
+
+        def __init__(self):
+            self.rng = random.Random(5)
+
+        def decide(self, state, questions):
+            out = {}
+            for n, q in questions.items():
+                opts = list((q.get("criteria") or {}).keys())
+                pick = opts[hash(state.get("channel", "")) % len(opts)]
+                probs = {o: (0.9 if o == pick else 0.1 / max(1, len(opts) - 1))
+                         for o in opts}
+                out[n] = {"probabilities": probs, "choice": pick}
+            return out
+
+    s = jev_evolve.salience_sensitivity(
+        simple_policy(), ReadsOnlyChannel(), tickets(150, seed=2),
+        jev_evolve.quote_prior("text", INTENTS), acc)
+    assert not s.captured
+
+
+def test_salience_check_fires_on_a_backend_that_reads_the_distractor():
+    pol = Policy({"intent": choice("Pick.", {
+        k: "Examples: " + " | ".join(v[:2]) for k, v in INTENTS.items()})})
+    s = jev_evolve.salience_sensitivity(
+        pol, OverlapBackend(seed=1), tickets(150, seed=2),
+        jev_evolve.quote_prior("text", INTENTS), acc)
+    assert s.captured and s.ratio > 2.0
+
+
+def test_the_matched_control_is_used_not_the_theoretical_chance_level():
+    """A model with a favourite label beats 1/(m-1) on any label and would
+    look captured. The baseline has to be the model's own rate."""
+    s = jev_evolve.SalienceSensitivity(
+        n=100, base_score=0.5, perturbed_score=0.4, newly_wrong=20,
+        to_distractor=8, base_wrong=50, base_wrong_to_distractor=20,
+        options=8)
+    assert abs(s.matched_control - 0.40) < 1e-9   # not 1/7
+    assert s.ratio < 1.5 and not s.captured
+
+
+def test_the_injector_leaves_the_original_request_intact():
+    """The gold label survives only if the live request is still there."""
+    rng = random.Random(0)
+    inject = jev_evolve.quote_prior("text", INTENTS)
+    state = {"text": "my card was declined at the till", "channel": "app"}
+    new, d = inject(state, "card_declined", rng)
+    assert state["text"] in new["text"] and d != "card_declined"
+    assert state["text"] == "my card was declined at the till"
