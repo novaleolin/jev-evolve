@@ -22,5 +22,6 @@ jobs:
       - run: pip install pytest
       - run: pip install -e .
       - run: pytest tests/ -q
+      - run: python examples/order_check.py
       - run: python examples/quickstart.py
       - run: python examples/null_loop.py

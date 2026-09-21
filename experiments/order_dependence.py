@@ -59,15 +59,46 @@ def main(args):
           f"   spread {max(accs) - min(accs):.3f}")
 
     print("\n3. accuracy with the ordering averaged away\n")
+    # The control that matters: average k calls with the order HELD FIXED.
+    # Without it, any gain from Marginalized could be the ensembling rather
+    # than the permuting, and the whole claim would be about averaging k
+    # calls, which needs no typed decision and no permutation at all.
+    class FixedOrderEnsemble:
+        def __init__(self, inner, k):
+            self.inner, self.k = inner, k
+
+        def decide(self, state, questions):
+            acc, nouls = {}, {}
+            for _ in range(self.k):
+                for n, a in self.inner.decide(state, questions).items():
+                    if "noul" in a:
+                        nouls.setdefault(n, []).append(float(a["noul"]))
+                        continue
+                    d = acc.setdefault(n, {})
+                    for o, pr in (a.get("probabilities") or {}).items():
+                        d[o] = d.get(o, 0.0) + float(pr)
+            out = {}
+            for n, d in acc.items():
+                t = sum(d.values()) or 1.0
+                pr = {o: v / t for o, v in d.items()}
+                out[n] = {"probabilities": pr, "choice": max(pr, key=pr.get)}
+            for n, vs in nouls.items():
+                out[n] = {"noul": sum(vs) / len(vs)}
+            return out
+
     rows = []
     for split, tasks in (("train", train), ("held-out", held)):
         base = run_policy(pol, backend, tasks, score).score
+        ens = run_policy(pol, FixedOrderEnsemble(backend, args.k), tasks,
+                         score).score
         marg = run_policy(pol, Marginalized(backend, args.k, seed=args.seed),
                           tasks, score).score
         rows.append({"split": split, "as_written": base,
+                     "fixed_order_ensemble": ens,
                      "marginalized_k": args.k, "marginalized": marg})
         print(f"    {split:9s} as written {base:.3f}"
-              f"   marginalized k={args.k} {marg:.3f}"
+              f"   k calls, order fixed {ens:.3f}"
+              f"   k calls, order permuted {marg:.3f}"
               f"   {marg - base:+.3f}")
 
     out = {"backend": label, "k": args.k, "orderings": accs,

@@ -1,15 +1,15 @@
 <div align="center">
 
-# Jev-Evolve: self-improving agents that know what's noise
+# Jev-Evolve: is your agent deciding, or reading the option order?
 
-**Typed decisions instead of generated text. A policy that evolves from the agent's own mistakes. And a number telling you how much of the improvement was luck.**
+**The same schema, the same model and the same 96 items scored 0.188 or 0.542 depending on what order the options were listed in. Find out what your typed decision is actually deciding on, remove it, and stop believing searches that never cleared their own noise floor.**
 
 [![PyPI](https://img.shields.io/pypi/v/jev-evolve?logo=pypi&logoColor=white)](https://pypi.org/project/jev-evolve/)
 [![Python](https://img.shields.io/pypi/pyversions/jev-evolve?logo=python&logoColor=white)](https://pypi.org/project/jev-evolve/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://img.shields.io/github/actions/workflow/status/novaleolin/jev-evolve/tests.yml?branch=main&label=tests&logo=github)](https://github.com/novaleolin/jev-evolve/actions)
 
-**[Quickstart](#quickstart) · [The null loop](#the-part-everyone-skips) · [Why jev](#why-typed-decisions-and-why-a-fast-one) · [How it works](#how-it-works) · [API](#api) · [FAQ](#faq) · [简体中文](README.zh-CN.md)**
+**[Quickstart](#quickstart) · [The measurement](#the-measurement) · [Why jev](#why-typed-decisions-and-why-a-fast-one) · [How it works](#how-it-works) · [API](#api) · [FAQ](#faq) · [简体中文](README.zh-CN.md)**
 
 </div>
 
@@ -17,148 +17,153 @@
 
 ## What is Jev-Evolve?
 
-An agent framework where every branch the agent takes is a typed question:
-pick one of these options, yes or no, score this. Not generated text that
-something downstream parses.
+An agent framework where every branch is a typed question: pick one of these
+options, yes or no, score this. Not generated text that something downstream
+parses.
 
-That has a consequence worth the whole library. The agent's policy becomes a
-data structure, so a loop can mutate it, and every decision comes with
-calibrated probabilities, so the loop can see exactly which decision lost
-which episode. The agent improves itself from its own trace.
+It exists because of what fell out of building it. We took an eight-option
+support-intent schema with careful hand-written rules and evolved its text
+for 14 generations and 43 candidates. It improved nothing, twice. The reason
+was not the search:
 
-And because a loop that keeps the best of many candidates reports a gain even
-when nothing improved, every run prints the gain a loop of the same size
-would have produced on an agent that never got better.
+```
+  answers that changed across 8 option orderings   96/96  (100%)
+    of which noise alone                            0/96  (0%)
+  accuracy by ordering            0.188 to 0.542   spread 0.354
+```
+
+The schema was not measuring its criteria. It was measuring where each option
+happened to sit in the list. Every text mutation had been fighting that.
+
+So the library does three things, in this order:
 
 | | |
 |---|---|
-| **Typed decisions** | `choice`, `noul`, `score`. Works with hosted decision endpoints, a local model, or a plain Python function |
-| **Evolves from its trace** | mutations aim at the option pair the agent actually confused, not at random |
-| **Reports its own noise** | a null loop in `examples/null_loop.py` reports +0.058 after 60 generations, with a true gain of zero |
-| **Runs offline** | the quickstart needs no API key, no model download, no network |
+| **1. Measure** | `permutation_sensitivity` runs k orderings against k fixed-order controls, so option order is not blamed for backend noise |
+| **2. Fix** | `Marginalized` averages the ordering away. **+15.6 points held-out**, against +0.0 from every text operator on the same schema |
+| **3. Verify** | `evolve` reports what a search of the same size scores when nothing improved, and decides on held-out data |
 
 ## Quickstart
 
 ```bash
 pip install jev-evolve
-python examples/quickstart.py     # 20 seconds, no API key, no downloads
+python examples/order_check.py     # 20 seconds, no API key, no downloads
 ```
 
-A ticket triage agent with one decision point, described the way everyone
-describes it first: each option labelled with its own name.
+Check before you tune. It is the cheapest thing in the library and it decides
+whether anything else you do can mean something. The example runs it on two
+schemas, one that fails and one that passes, because a check that always
+fires is not a check.
 
 ```python
-from jev_evolve import Policy, choice, evolve, run_policy
-from jev_evolve.demo import INTENTS, OverlapBackend, tickets
-from jev_evolve.mutate import mutate_criteria_from_errors, mutate_threshold
+from jev_evolve import permutation_sensitivity, Marginalized, run_policy
 
-train, held = tickets(120, seed=1), tickets(120, seed=2)
-policy = Policy({"intent": choice(
-    "Which intent does this support ticket belong to?",
-    {k: k.replace("_", " ") for k in INTENTS})})
-
-backend = OverlapBackend(seed=7)
-score = lambda ep: float(ep.decisions[0].choice == ep.label)
-
-# One pass first, so the mutations have real mistakes to aim at.
-trace = run_policy(policy, backend, train, score)
-
-res = evolve(policy, backend, train, score,
-             operators=[mutate_criteria_from_errors(trace), mutate_threshold()],
-             generations=12, candidates=3, heldout=held, seed=3)
-print(res.report())
+print(permutation_sensitivity(policy, backend, tasks, score, k=8).report())
 ```
 
 ```
-  generations            13
-  candidates scored      37
-  baseline (train)       0.475
-  winner   (train)       0.742   apparent gain +0.267
-  selection floor        +0.097   <- the gain is above the floor
-  baseline (held-out)    0.467
-  winner   (held-out)    0.633   real gain +0.167
-  held-out paired        30 fixed / 10 broken   p=0.0022
+  option orderings tried   8   (plus 8 controls with the order held fixed)
+  answers that changed     96/96   (100.0%)
+    of which noise alone   0/96   (0.0%)
+    attributable to order  100.0%
+  accuracy by ordering     0.188 to 0.542   spread 0.354
+    control spread         0.000
 
-  verdict: CREDIBLE
+  ORDER-DEPENDENT: this schema is partly measuring option
+  position, so tuning its text will mostly fit noise.
+  Wrap the backend in Marginalized(backend, k) and re-check.
 ```
 
-Thirty-seven candidates were scored, not the four that were kept. The floor
-is computed from all thirty-seven, because that is how many chances the loop
-had to get lucky.
+Then fix it, which is one wrapper:
 
-## The part everyone skips
-
-Run the same loop on a backend that answers at random and ignores the policy
-entirely. No mutation can help it. The true gain is zero.
-
-```bash
-python examples/null_loop.py
+```python
+run_policy(policy, Marginalized(backend, k=8), tasks, score)
 ```
 
-```
-   5 generations  apparent gain +0.017   floor +0.064   verdict NOT CONFIRMED
-  20 generations  apparent gain +0.050   floor +0.086   verdict NOT CONFIRMED
-  60 generations  apparent gain +0.058   floor +0.101   verdict NOT CONFIRMED
-```
+## The measurement
 
-![what a loop reports when nothing improves](docs/null.png)
+Qwen2.5-0.5B, 96 banking77 items over 8 confusable card intents, one written
+rule per option. `python experiments/order_dependence.py --k 8`.
 
-The reported gain grows with the number of generations, on an agent that is
-not improving at all. This is not a bug in this loop. It is what happens
-whenever you keep the best of several noisy measurements, and it applies to
-every self-improving agent that selects on an eval score.
+Eight orderings of the same eight options:
 
-Jev-Evolve handles it in two ways. It prints the floor, so you can see the size
-of the effect for your own setup. And it decides the verdict on a held-out
-split the search never touched, using a paired sign test, so a run is
-`CREDIBLE` only on evidence that selection could not have manufactured.
+| ordering | accuracy |
+| :--- | ---: |
+| 0 (as written) | 0.458 |
+| 1 | 0.302 |
+| 2 | 0.438 |
+| 3 | **0.542** |
+| 4 | **0.188** |
+| 5 | 0.417 |
+| 6 | 0.385 |
+| 7 | 0.438 |
 
-The arithmetic comes from [evalfloor](https://github.com/novaleolin/evalfloor),
-which is a dependency rather than a copy, so there is one implementation
-instead of two that drift.
+Which number your schema ships with depends on the order you happened to
+type the options in.
+
+### The control that the claim depends on
+
+Averaging k calls could help simply because it is an ensemble, which would
+have nothing to do with option order, with typed decisions, or with this
+library. So the same k calls are also run with the ordering left alone:
+
+| split | as written | k calls, order fixed | k calls, order permuted |
+| :--- | ---: | ---: | ---: |
+| train | 0.458 | 0.458 | **0.635** (+0.177) |
+| held-out | 0.448 | 0.448 | **0.604** (+0.156) |
+
+The fixed-order column equals the as-written column to three decimals. The
+backend is deterministic, so ensembling contributes exactly nothing, and the
+entire gain is the permuting.
+
+### Searching for a good order is not the same as removing it
+
+Both halves of the library meet on this table. Picking the best of the eight
+orderings on the training split is a search, so the selection floor applies
+to it. Marginalizing selects nothing, so it does not.
+
+| | train gain | floor | held-out gain |
+| :--- | ---: | ---: | ---: |
+| pick the best of 8 orderings | +0.083 | **+0.073** | +0.115 |
+| marginalize the ordering away | n/a | none applies | **+0.156** |
+
+The search's apparent train gain of +0.083 sits +0.010 above the +0.073 that
+eight candidates on 96 items score with no real differences at all. Almost
+all of it was the selection. It still transfers, to +0.115 on held-out, and
+it is still worse than removing the dependence, which reaches +0.156 without
+selecting anything and beats the luckiest ordering in the set.
+
+That is the argument for fixing a bias rather than tuning around it, on one
+schema, with numbers.
 
 ## Why typed decisions, and why a fast one
 
-The name is a fair question to ask of a library whose examples run without
-any decision model at all. Here is the honest answer, in two parts.
+### The search space exists because the decisions are typed
 
-### The search space only exists because the decisions are typed
+An agent that decides by generating text gives a tuning loop one prompt and
+one scalar per episode. An agent whose branches are typed questions gives it
+a structure, and the structure is most of what there is to work with.
 
-An agent that decides by generating text gives a tuning loop one thing: a
-prompt, and one scalar per episode saying whether the episode worked. An
-agent whose branches are typed questions gives it a structure, and the
-structure is most of what there is to search.
-
-| what a loop can search | generating agent | typed-decision agent |
+| what a loop can see or change | generating agent | typed-decision agent |
 | :--- | :---: | :---: |
 | instruction wording | yes | yes |
 | the text describing each option | no, options are not a declared set | yes |
+| **the order the options are presented in** | not separable from the prompt | yes |
 | which decision runs first | no, it is one blob | yes |
 | what each decision is allowed to see | no, it is one context | yes |
-| when to abstain instead of answering | no calibrated probability to threshold | yes |
-| **which** option to sharpen, and against which rival | no probability vector | yes |
+| when to abstain instead of answering | no calibrated probability | yes |
+| which option to sharpen, against which rival | no probability vector | yes |
 | which decision point lost the episode | one scalar outcome | yes |
 
-Six of the seven are unavailable without typed decisions. That is why this
-is an agent library rather than a prompt optimiser: the unit being evolved
-is a decision, and a decision has parts.
+The third row is the one this project was built on the wrong side of.
+Permuting the options of a declared option set is a well-defined operation.
+Permuting "the options" inside a free-text prompt is not.
 
-The last two rows are what make the loop targeted rather than random.
-`confusions()` reads the probability vectors and names the option pair the
-agent actually swaps, so `mutate_from_confusions` rewrites that boundary
-instead of paraphrasing something already correct.
+### And the fix costs k decisions per answer
 
-### And the loop is thousands of decisions, so the per-decision cost is the loop
-
-One run of `experiments/jev_transfer.py` is 14 generations by 3 candidates
-over 96 tasks, plus the held-out passes: about 4,000 decisions for a single
-answer to a single question. That arithmetic, not taste, is why
-self-improvement loops in the wild skip held-out validation and report train
-scores.
-
-Measured on the same connection, same items, same option set, same criteria
-text ([`jevbench/compare.py`](https://github.com/novaleolin/jev-evolve), 160
-items over 8 confusable intents):
+Marginalizing over orderings is not a new idea. What is new is being able to
+afford it. Measured on the same connection, same items, same option set, same
+criteria text, 160 items over 8 confusable intents:
 
 | model | accuracy | p50 | p90 |
 | :--- | ---: | ---: | ---: |
@@ -168,31 +173,25 @@ items over 8 confusable intents):
 | openai/gpt-5-nano | 0.881 | 703 ms | 907 ms |
 | ibm-granite/granite-4.0-h-micro | 0.786 | 568 ms | 1064 ms |
 
-Read that honestly: out of the box the decision model was the fastest by a
-clear margin, with by far the tightest tail, and it was **4.4 points less
-accurate** than the best cheap generative model. A 4,000-decision loop feels
-that p90 difference as hours.
+Read it honestly: out of the box the decision model was the fastest with by
+far the tightest tail, and **4.4 points less accurate** than the best cheap
+generative model.
 
-So this library's bet is narrow and falsifiable: **those 4.4 points are a
-schema problem, not a model problem.** The rules in that comparison were
-written once by hand and never measured, which is the condition this package
-exists to fix. `experiments/jev_transfer.py` tests the bet directly. It
-evolves the schema offline against a 0.5B local model for free, then spends
-exactly 2N hosted calls scoring the starting schema against the winner.
-
-That experiment is also the only honest way to justify the advice in
-[Backends](#backends). Telling you to evolve locally and validate hosted is
-worthless if the schema a small local model likes is not one the hosted
-model likes, so the transfer is measured rather than assumed.
+That is the whole argument, and it is not about speed for its own sake. At
+450 ms with a p90 of 536, `Marginalized(backend, k=8)` is a decision that
+takes a few seconds. At 3 seconds a call with a p90 over a second wider, the
+same fix is half a minute per decision and nobody ships it. A known, correct,
+expensive correction becomes practical, and on the local model it was worth
++15.6 points on held-out data, which is more than three times the gap the
+decision model started with.
 
 ## How it works
 
-Four pieces, each independently usable.
+Five pieces, each usable on its own.
 
-**Policy.** The decision points, as data. Instruction text, per-option
-criteria, which state fields each point can see, and the confidence
-threshold below which it abstains. All four are searchable. Three of them
-are invisible to a prompt optimiser.
+**Policy.** The decision points, as data: instruction text, per-option
+criteria, the order the options are listed in, which state fields each point
+can see, and the confidence below which it abstains. All searchable.
 
 ```python
 from jev_evolve import Policy, choice, noul
@@ -204,12 +203,26 @@ policy = Policy({
 }, order=["in_scope", "intent"])
 ```
 
-**Agent.** A loop over those points. `act(state, answer)` applies each answer
-and is where your tools live. Return `{jev_evolve.STOP: True}` to finish early.
+**Invariance.** The check and the fix. Run it first.
 
 ```python
-from jev_evolve import Agent, RuleBackend
+from jev_evolve import permutation_sensitivity, Marginalized
 
+s = permutation_sensitivity(policy, backend, tasks, score, k=8)
+if not s.sound:
+    backend = Marginalized(backend, k=8)
+```
+
+`Sensitivity` carries `.flip_rate`, `.noise_rate` from the control, and
+`.excess_flip_rate`, which is the part attributable to order. The verdict
+rests on the excess, and on the flip rate rather than the spread, because
+max-minus-min over k runs grows with k on its own and is badly resolved at
+any k worth paying for.
+
+**Agent.** A loop over the points. `act(state, answer)` applies each answer
+and is where your tools live. Return `{jev_evolve.STOP: True}` to finish.
+
+```python
 def act(state, answer):
     if answer.name == "in_scope" and not answer:
         return {jev_evolve.STOP: True, "outcome": "handoff"}
@@ -218,39 +231,57 @@ def act(state, answer):
 episode = Agent(policy, backend, act=act).run("t1", {"text": "lost my card"})
 ```
 
-`answer` is falsy when the point abstained or answered no, so `if not answer`
-covers both. `answer.margin` is the gap to the runner-up, which is the field
-worth sorting your errors by.
+`answer` is falsy when the point abstained or answered no. `answer.margin`
+is the gap to the runner-up.
 
-**Trace.** Every decision, its probabilities and its latency, saved as JSONL.
-Three readers come with it:
+**Trace.** Every decision, its probabilities and its latency, as JSONL.
 
 ```python
 jev_evolve.confusions(trace)       # (point, picked, should have been) -> count
-jev_evolve.point_accuracy(trace)   # which decision point owns the loss
-jev_evolve.overconfident(trace)    # wrong and sure, the ones thresholds can't catch
+jev_evolve.point_accuracy(trace)   # which point owns the loss
+jev_evolve.overconfident(trace)    # wrong and sure: thresholds cannot catch these
 jev_evolve.cost(trace)             # decisions and seconds per episode
 ```
 
-**Evolve.** Generations of mutants, scored, with the best kept.
+**Evolve.** Generations of mutants, scored, best kept, and an honest report.
 
 ```python
 from jev_evolve.mutate import default_operators
 
-ops = default_operators(available_fields=["text", "channel", "tier"],
+ops = default_operators(available_fields=["text", "channel"],
                         examples_by_label=INTENTS, trace=trace)
 res = evolve(policy, backend, train, score, ops, heldout=held)
+print(res.report())
 res.best.save("policy.json")
 ```
 
+A loop that keeps the best of many candidates reports a gain even when
+nothing improved. `python examples/null_loop.py` runs this loop against a
+backend that answers at random and ignores the policy, where the true gain
+is exactly zero:
+
+```
+   5 generations  apparent gain +0.017   floor +0.064   NOT CONFIRMED
+  20 generations  apparent gain +0.050   floor +0.086   NOT CONFIRMED
+  60 generations  apparent gain +0.058   floor +0.101   NOT CONFIRMED
+```
+
+![what a loop reports when nothing improves](docs/null.png)
+
+The reported gain grows with the number of generations on an agent that is
+not improving. Every self-improving loop that selects on an eval score has
+this; most do not report it. The arithmetic is
+[evalfloor](https://github.com/novaleolin/evalfloor), a dependency rather
+than a copy.
+
 ## Mutations
 
-Five edit the policy blind. Two read the agent's own trace, and those are
-the reason the trace exists.
+Six edit the policy blind. Two read the agent's own trace.
 
 | operator | what it changes | needs |
 | :--- | :--- | :--- |
-| `mutate_threshold` | when a point abstains instead of guessing | nothing |
+| `mutate_option_order` | how the options are ordered | nothing |
+| `mutate_threshold_from_trace` | abstention, on a grid read off the backend's own confidences | a trace |
 | `mutate_order` | which point runs first, and so what later points see | nothing |
 | `mutate_state_fields` | what one point is allowed to see | field names |
 | `mutate_criteria_from_examples` | describes an option by real inputs | labelled data |
@@ -258,42 +289,38 @@ the reason the trace exists.
 | `mutate_from_confusions` | rewrites the option most often picked by mistake | a trace, a rewriter |
 | `mutate_instructions` | rewrites a point's instruction text | a rewriter |
 
-A rewriter is any `(text, slot, rng) -> text`. An LLM is the obvious one, and
-a template or a hand-written list works too. The `rng` is part of the
-contract: a rewriter that reaches for the global `random` makes the run
+Use `mutate_threshold_from_trace` rather than the fixed-grid
+`mutate_threshold`. On the 8-option task above, the fixed grid's values at or
+below 0.2 were all the same no-op, and those at or above 0.5 abstained on
+four decisions in five: two of eleven grid points did anything at all, and a
+third of the candidate slots in a 15-generation run went to values that could
+not have helped.
+
+A rewriter is any `(text, slot, rng) -> text`. The `rng` is part of the
+contract: a rewriter reaching for the global `random` makes a run
 unreproducible, and a tool whose job is telling you how much of a gain is
 real cannot give a different answer each time you ask.
 
-The first four need no LLM at all, so a generation costs nothing and there is
-never a budget reason to skip the check.
-
 ## Backends
-
-```python
-from jev_evolve import RuleBackend, JevBackend
-```
 
 | backend | what it is | cost |
 | :--- | :--- | :--- |
 | `RuleBackend` | a Python function. Tests, baselines, hybrid policies | free |
-| `OverlapBackend` | `jev_evolve.demo`, answers by word overlap. Examples and CI | free |
+| `OverlapBackend` | `jev_evolve.demo`, scores by word overlap. Examples and CI | free |
 | `LocalBackend` | option logits from any causal LM, one prefill, no generation | local GPU |
 | `JevBackend` | a hosted typed-decision endpoint | per call |
+| `Marginalized` | wraps any of the above, k orderings averaged | k times the inner |
 
-`LocalBackend` needs `pip install "jev-evolve[local]"`. Everything else in the
-package works with no extra dependency, and `import jev_evolve` pulls in no
-model library.
+`LocalBackend` needs `pip install "jev-evolve[local]"`. Everything else works
+with no extra dependency, and `import jev_evolve` pulls in no model library.
 
 `JevBackend` defaults to the OpenRouter decisions API and takes `endpoint=`
 for anything with the same `{model, state, questions}` shape. Nothing else in
 the package knows which vendor is behind it.
 
-A note on where to run the loop. Hosted providers generally forbid using
-output to train or build a competing model. Evolving a policy against a local
-or rule backend and merely checking the winner against the hosted endpoint
-keeps you on the right side of that, and it is also much cheaper.
-
-That second step is one call:
+Hosted providers generally forbid using output to train or build a competing
+model, and a generational loop is thousands of decisions. Evolve against
+something you own, then validate the winner:
 
 ```python
 from jev_evolve import JevBackend, validate_transfer
@@ -302,20 +329,23 @@ t = validate_transfer(policy, res.best, JevBackend(), heldout, score)
 print(t.report())    # costs exactly 2 * len(heldout) calls
 ```
 
-`validate_transfer` reports no floor, and none applies. Nothing is being
-selected: two fixed policies are scored on the same items and compared
-pairwise. Running it over several evolved candidates and keeping the best
-would reintroduce selection, and then the floor would be back.
+`validate_transfer` reports no floor and none applies: two fixed policies
+scored on the same items select nothing. Running it over several candidates
+and keeping the best would reintroduce selection, and the floor with it.
 
 ## API
 
 ```python
 from jev_evolve import Policy, Point, choice, noul       # the policy
+from jev_evolve import permutation_sensitivity, Marginalized, Sensitivity
 from jev_evolve import Agent, Answer, STOP               # the loop
 from jev_evolve import Trace, Episode, Decision          # the record
 from jev_evolve import evolve, run_policy, Result        # the search
 from jev_evolve import validate_transfer, Transfer       # local -> hosted
 from jev_evolve import confusions, point_accuracy, overconfident, cost
+
+permutation_sensitivity(policy, backend, tasks, score, k=4)
+# -> Sensitivity: .flip_rate .noise_rate .excess_flip_rate .sound .report()
 
 evolve(policy, backend, tasks, score, operators,
        generations=20, candidates=4, heldout=None, act=None, seed=0)
@@ -323,9 +353,6 @@ evolve(policy, backend, tasks, score, operators,
 
 validate_transfer(base, evolved, backend, tasks, score)
 # -> Transfer: .gain .paired .transferred .calls .p50_s .p90_s .report()
-
-run_policy(policy, backend, tasks, score) -> Trace
-Agent(policy, backend, act=None, route=None).run(task_id, state, label) -> Episode
 ```
 
 A task is `(id, state, label)` or `{"id":..., "state":..., "label":...}`.
@@ -333,55 +360,60 @@ A task is `(id, state, label)` or `{"id":..., "state":..., "label":...}`.
 
 ## Limits
 
-The selection floor assumes candidates are evaluated independently on a 0/1
+`permutation_sensitivity` covers option order. It is the invariance that
+turned out to dominate here, and it is not the only one a typed decision can
+violate: state field order, option naming and irrelevant state are all
+untested by this check, and a schema it calls STABLE may still be measuring
+one of them.
+
+The reported floor assumes candidates are evaluated independently on a 0/1
 metric. Candidates in an evolutionary loop are correlated by descent, which
-makes the true floor higher than reported, so the printed number is a lower
-bound. A gain under it is under the true floor as well. A gain over it still
-needs the held-out test.
+makes the true floor higher, so the printed number is a lower bound.
 
 Attribution needs to know which decision point should have answered what.
-With one choice point in the policy, `default_gold` handles it. With more,
-pass your own `gold(episode) -> {point: answer}`. It refuses to guess, because
-a guessed attribution aims every later mutation at the wrong decision.
+With one choice point, `default_gold` handles it. With more, pass your own
+`gold(episode) -> {point: answer}`. It refuses to guess, because a guessed
+attribution aims every later mutation at the wrong decision.
 
-Latency numbers come from wall-clock time around the backend call and include
-network time.
+The measurements above are one model on one 8-option task. The mechanism is
+general and well documented elsewhere; the magnitude is not a constant, which
+is why the check ships as a function you run on your own schema instead of a
+number you take from this README.
 
 ## FAQ
 
-**How is this different from DSPy or a prompt optimiser?**
-Those search over prompt text and few-shot examples, which is one of the
-seven dimensions here. The other six exist only because a decision is a
-declared object with named options and calibrated probabilities: option
-criteria, decision order, per-point state visibility, abstention thresholds,
-which rival to sharpen against, and which decision point lost the episode.
-And the run ends with a verdict rather than a best score.
+**My agent already works. What do I get?**
+Run `permutation_sensitivity` on one recorded set. It costs `2 * k * n`
+decisions and tells you whether your schema is measuring its criteria or its
+formatting. That is worth the afternoon before anything else here.
+
+**Isn't option-order bias a known problem?**
+Yes, and that is the point. It is known, the fix is known, and it is skipped
+because it costs k times as much. What this library adds is measuring it
+against a control, fixing it in one wrapper, and making the cost affordable
+by putting the decision on a model built for decisions.
+
+**Why not just search for the best ordering?**
+Measured above: picking the best of eight gave +0.115 on held-out, while
+almost all of its training gain was selection noise. Marginalizing gave
++0.156 and selected nothing.
 
 **Do I need a Jev or System One model?**
-No, and the name is still right. What the library requires is that decisions
-be *typed*, which is what the whole search space is made of. A jev-class
-model is the cheapest and lowest-latency way to serve typed decisions, which
-is what makes a thousand-decision loop practical, but `LocalBackend` and
-`RuleBackend` serve them too. See
-[Why typed decisions](#why-typed-decisions-and-why-a-fast-one).
+No, and the name is still right. What the library needs is that decisions be
+*typed*, which is what the search space is made of. A jev-class model is the
+cheapest, lowest-latency way to serve typed decisions, which is what makes
+`Marginalized` and a thousand-decision loop affordable. `LocalBackend` and
+`RuleBackend` serve typed decisions too.
 
-**My agent already works. What do I get?**
-`confusions()` and `point_accuracy()` on one recorded run, which usually shows
-that a single decision point owns most of the loss. That is worth the
-afternoon on its own, before any evolution.
+**How is this different from DSPy or a prompt optimiser?**
+Those search over prompt text and few-shot examples, which is one row of the
+table above. The rest exist only because a decision is a declared object with
+named options and calibrated probabilities. And a run here ends with a
+verdict rather than a best score.
 
 **Why is my run UNDERPOWERED?**
 An exact sign test over `d` disagreements cannot return a p-value below
-2^(1-d), so five or fewer can never reach 0.05. The winner may well be
-better; your held-out split is too small to show it. Use more held-out data.
-
-**Can I evolve against the hosted endpoint directly?**
-You can, and it will be slow and expensive, and the provider's terms probably
-do not want you to. Evolve locally, validate hosted.
-
-**Does the floor mean my improvement is fake?**
-It means a search of that size gets that much for free. The verdict comes
-from the held-out sign test, not the floor. A gain under the train floor can
-still be credible, and `Result.credible` will say so.
+2^(1-d), so five or fewer never reach 0.05. Your held-out split is too small
+to settle it, which is not the same as a negative result.
 
 MIT.

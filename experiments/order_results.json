@@ -1,0 +1,33 @@
+{
+  "backend": "Qwen/Qwen2.5-0.5B-Instruct",
+  "k": 8,
+  "orderings": [
+    0.4583333333333333,
+    0.3020833333333333,
+    0.4375,
+    0.5416666666666666,
+    0.1875,
+    0.4166666666666667,
+    0.3854166666666667,
+    0.4375
+  ],
+  "flip_rate": 1.0,
+  "noise_rate": 0.0,
+  "excess_flip_rate": 1.0,
+  "splits": [
+    {
+      "split": "train",
+      "as_written": 0.4583333333333333,
+      "fixed_order_ensemble": 0.4583333333333333,
+      "marginalized_k": 8,
+      "marginalized": 0.6354166666666666
+    },
+    {
+      "split": "held-out",
+      "as_written": 0.4479166666666667,
+      "fixed_order_ensemble": 0.4479166666666667,
+      "marginalized_k": 8,
+      "marginalized": 0.6041666666666666
+    }
+  ]
+}
