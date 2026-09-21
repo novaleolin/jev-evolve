@@ -16,11 +16,13 @@ keywords = [
   "self-improving", "self-evolving", "prompt-optimization", "evaluation",
   "selection-bias", "agent-framework",
 ]
+# The license is declared as a PEP 639 expression above; setuptools rejects
+# a license trove classifier alongside it. The Python version classifiers stay:
+# shields.io reads pypi/pyversions from them, not from requires-python.
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
