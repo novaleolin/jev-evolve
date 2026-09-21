@@ -261,3 +261,41 @@ def test_evolution_is_reproducible_across_processes():
                            text=True, env={**os.environ, "PYTHONHASHSEED": h}
                            ).stdout.strip() for h in ("0", "1", "2")}
     assert len(outs) == 1, f"run differed across hash seeds: {outs}"
+
+
+def test_validate_transfer_spends_exactly_two_calls_per_task():
+    """The whole point of the helper is that it is 2N and not thousands.
+
+    An implementation that quietly re-ran the search on the paid backend
+    would still produce a plausible report, and the bill would be the only
+    thing that noticed.
+    """
+    calls = {"n": 0}
+    inner = OverlapBackend(seed=1)
+
+    class Counting:
+        def decide(self, state, questions):
+            calls["n"] += 1
+            return inner.decide(state, questions)
+
+    base = simple_policy()
+    evolved = simple_policy()
+    evolved.points["intent"].threshold = 0.3
+    tasks = tickets(40, seed=2)
+    t = jev_evolve.validate_transfer(base, evolved, Counting(), tasks, acc)
+    assert calls["n"] == len(tasks) * 2 == t.calls
+
+
+def test_transfer_reports_no_floor_because_nothing_is_selected():
+    """Two fixed policies scored on the same items is a comparison, not a
+    search. Printing a selection floor there would be theatre.
+
+    The backend is set noise-free on purpose. A stochastic one gives the two
+    arms different draws, so even identical policies differ slightly, which
+    is correct behaviour and exactly what the paired test is for, but it is
+    not what this test is about."""
+    t = jev_evolve.validate_transfer(simple_policy(), simple_policy(),
+                                     OverlapBackend(seed=1, noise=0.0),
+                                     tickets(30, 2), acc)
+    assert not hasattr(t, "floor")
+    assert t.gain == 0.0 and not t.transferred

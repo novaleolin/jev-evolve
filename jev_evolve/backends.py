@@ -101,8 +101,8 @@ class LocalBackend:
     This is not trying to match a purpose-trained decision model's accuracy.
     It is trying to give the SEARCH a cheap, deterministic, offline signal.
     Whether a schema found this way survives on the hosted model is an
-    empirical question, which is why `Evolution.report()` keeps the two
-    numbers separate instead of assuming they agree.
+    empirical question, and `validate_transfer` is what answers it for your
+    own schema without running the whole loop against a paid endpoint.
     """
 
     @staticmethod

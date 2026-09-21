@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://img.shields.io/github/actions/workflow/status/novaleolin/jev-evolve/tests.yml?branch=main&label=tests&logo=github)](https://github.com/novaleolin/jev-evolve/actions)
 
-**[Quickstart](#quickstart) · [The null loop](#the-part-everyone-skips) · [How it works](#how-it-works) · [API](#api) · [FAQ](#faq) · [简体中文](README.zh-CN.md)**
+**[Quickstart](#quickstart) · [The null loop](#the-part-everyone-skips) · [Why jev](#why-typed-decisions-and-why-a-fast-one) · [How it works](#how-it-works) · [API](#api) · [FAQ](#faq) · [简体中文](README.zh-CN.md)**
 
 </div>
 
@@ -116,6 +116,74 @@ split the search never touched, using a paired sign test, so a run is
 The arithmetic comes from [evalfloor](https://github.com/novaleolin/evalfloor),
 which is a dependency rather than a copy, so there is one implementation
 instead of two that drift.
+
+## Why typed decisions, and why a fast one
+
+The name is a fair question to ask of a library whose examples run without
+any decision model at all. Here is the honest answer, in two parts.
+
+### The search space only exists because the decisions are typed
+
+An agent that decides by generating text gives a tuning loop one thing: a
+prompt, and one scalar per episode saying whether the episode worked. An
+agent whose branches are typed questions gives it a structure, and the
+structure is most of what there is to search.
+
+| what a loop can search | generating agent | typed-decision agent |
+| :--- | :---: | :---: |
+| instruction wording | yes | yes |
+| the text describing each option | no, options are not a declared set | yes |
+| which decision runs first | no, it is one blob | yes |
+| what each decision is allowed to see | no, it is one context | yes |
+| when to abstain instead of answering | no calibrated probability to threshold | yes |
+| **which** option to sharpen, and against which rival | no probability vector | yes |
+| which decision point lost the episode | one scalar outcome | yes |
+
+Six of the seven are unavailable without typed decisions. That is why this
+is an agent library rather than a prompt optimiser: the unit being evolved
+is a decision, and a decision has parts.
+
+The last two rows are what make the loop targeted rather than random.
+`confusions()` reads the probability vectors and names the option pair the
+agent actually swaps, so `mutate_from_confusions` rewrites that boundary
+instead of paraphrasing something already correct.
+
+### And the loop is thousands of decisions, so the per-decision cost is the loop
+
+One run of `experiments/jev_transfer.py` is 14 generations by 3 candidates
+over 96 tasks, plus the held-out passes: about 4,000 decisions for a single
+answer to a single question. That arithmetic, not taste, is why
+self-improvement loops in the wild skip held-out validation and report train
+scores.
+
+Measured on the same connection, same items, same option set, same criteria
+text ([`jevbench/compare.py`](https://github.com/novaleolin/jev-evolve), 160
+items over 8 confusable intents):
+
+| model | accuracy | p50 | p90 |
+| :--- | ---: | ---: | ---: |
+| typesafe/jev-1.13 | 0.856 | **450 ms** | **536 ms** |
+| mistralai/mistral-nemo | **0.900** | 656 ms | 1206 ms |
+| qwen/qwen3.7-flash | 0.881 | 764 ms | 917 ms |
+| openai/gpt-5-nano | 0.881 | 703 ms | 907 ms |
+| ibm-granite/granite-4.0-h-micro | 0.786 | 568 ms | 1064 ms |
+
+Read that honestly: out of the box the decision model was the fastest by a
+clear margin, with by far the tightest tail, and it was **4.4 points less
+accurate** than the best cheap generative model. A 4,000-decision loop feels
+that p90 difference as hours.
+
+So this library's bet is narrow and falsifiable: **those 4.4 points are a
+schema problem, not a model problem.** The rules in that comparison were
+written once by hand and never measured, which is the condition this package
+exists to fix. `experiments/jev_transfer.py` tests the bet directly. It
+evolves the schema offline against a 0.5B local model for free, then spends
+exactly 2N hosted calls scoring the starting schema against the winner.
+
+That experiment is also the only honest way to justify the advice in
+[Backends](#backends). Telling you to evolve locally and validate hosted is
+worthless if the schema a small local model likes is not one the hosted
+model likes, so the transfer is measured rather than assumed.
 
 ## How it works
 
@@ -225,6 +293,20 @@ output to train or build a competing model. Evolving a policy against a local
 or rule backend and merely checking the winner against the hosted endpoint
 keeps you on the right side of that, and it is also much cheaper.
 
+That second step is one call:
+
+```python
+from jev_evolve import JevBackend, validate_transfer
+
+t = validate_transfer(policy, res.best, JevBackend(), heldout, score)
+print(t.report())    # costs exactly 2 * len(heldout) calls
+```
+
+`validate_transfer` reports no floor, and none applies. Nothing is being
+selected: two fixed policies are scored on the same items and compared
+pairwise. Running it over several evolved candidates and keeping the best
+would reintroduce selection, and then the floor would be back.
+
 ## API
 
 ```python
@@ -232,11 +314,15 @@ from jev_evolve import Policy, Point, choice, noul       # the policy
 from jev_evolve import Agent, Answer, STOP               # the loop
 from jev_evolve import Trace, Episode, Decision          # the record
 from jev_evolve import evolve, run_policy, Result        # the search
+from jev_evolve import validate_transfer, Transfer       # local -> hosted
 from jev_evolve import confusions, point_accuracy, overconfident, cost
 
 evolve(policy, backend, tasks, score, operators,
        generations=20, candidates=4, heldout=None, act=None, seed=0)
 # -> Result: .best .gain .floor .heldout .credible .verdict .report()
+
+validate_transfer(base, evolved, backend, tasks, score)
+# -> Transfer: .gain .paired .transferred .calls .p50_s .p90_s .report()
 
 run_policy(policy, backend, tasks, score) -> Trace
 Agent(policy, backend, act=None, route=None).run(task_id, state, label) -> Episode
@@ -264,15 +350,20 @@ network time.
 ## FAQ
 
 **How is this different from DSPy or a prompt optimiser?**
-Those search over prompt text and few-shot examples. Here the unit is a typed
-decision, so the search also covers option criteria, per-point state
-visibility, confidence thresholds and decision order. And the run ends with a
-verdict rather than a best score.
+Those search over prompt text and few-shot examples, which is one of the
+seven dimensions here. The other six exist only because a decision is a
+declared object with named options and calibrated probabilities: option
+criteria, decision order, per-point state visibility, abstention thresholds,
+which rival to sharpen against, and which decision point lost the episode.
+And the run ends with a verdict rather than a best score.
 
 **Do I need a Jev or System One model?**
-No. `RuleBackend` and `OverlapBackend` need nothing, `LocalBackend` runs any
-causal LM by reading option logits. A hosted typed-decision endpoint is one
-backend of four.
+No, and the name is still right. What the library requires is that decisions
+be *typed*, which is what the whole search space is made of. A jev-class
+model is the cheapest and lowest-latency way to serve typed decisions, which
+is what makes a thousand-decision loop practical, but `LocalBackend` and
+`RuleBackend` serve them too. See
+[Why typed decisions](#why-typed-decisions-and-why-a-fast-one).
 
 **My agent already works. What do I get?**
 `confusions()` and `point_accuracy()` on one recorded run, which usually shows

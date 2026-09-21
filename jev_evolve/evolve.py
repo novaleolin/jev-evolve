@@ -226,3 +226,71 @@ def _confirm(base_hits: list[int], new_hits: list[int]):
     except ImportError:  # pragma: no cover
         return None
     return confirm(base_hits, new_hits)
+
+
+def validate_transfer(base: Policy, evolved: Policy, backend: Backend,
+                      tasks: Sequence, score: ScoreFn, act=None, route=None):
+    """Score a starting schema against an evolved one on a second backend.
+
+    This is the whole "evolve locally, validate hosted" workflow, and it
+    costs exactly `2 * len(tasks)` calls rather than the thousands a
+    generational loop would spend. Use it after `evolve` has run somewhere
+    free.
+
+    No floor is reported and none applies. Nothing is being selected here:
+    two fixed policies are scored on the same items and compared pairwise, so
+    the sign test is the whole result. Running this over several evolved
+    candidates and keeping the best would reintroduce selection, and then the
+    floor would apply again.
+    """
+    a = run_policy(base, backend, tasks, score, act, route)
+    b = run_policy(evolved, backend, tasks, score, act, route)
+    lat = sorted(d.latency_s for e in list(a) + list(b) for d in e.decisions)
+    c = _confirm(_hits(a), _hits(b))
+    return Transfer(base_score=a.score, evolved_score=b.score, paired=c,
+                    calls=len(tasks) * 2, base_trace=a, evolved_trace=b,
+                    p50_s=lat[len(lat) // 2] if lat else 0.0,
+                    p90_s=lat[int(len(lat) * 0.9)] if lat else 0.0)
+
+
+@dataclass
+class Transfer:
+    """Whether a schema evolved elsewhere survives on this backend."""
+
+    base_score: float
+    evolved_score: float
+    paired: Any
+    calls: int
+    p50_s: float = 0.0
+    p90_s: float = 0.0
+    base_trace: Trace = field(default=None, repr=False)
+    evolved_trace: Trace = field(default=None, repr=False)
+
+    @property
+    def gain(self) -> float:
+        return self.evolved_score - self.base_score
+
+    @property
+    def transferred(self) -> bool:
+        return bool(self.paired is not None and self.paired.confirmed)
+
+    def report(self) -> str:
+        L = [f"  baseline schema        {self.base_score:.3f}",
+             f"  evolved schema         {self.evolved_score:.3f}"
+             f"   gain {self.gain:+.3f}",
+             f"  paired, same items     {self.paired.wins} fixed /"
+             f" {self.paired.losses} broken   p={self.paired.p_value:.4f}",
+             f"  decision latency       p50 {self.p50_s * 1000:.0f}ms"
+             f"   p90 {self.p90_s * 1000:.0f}ms",
+             f"  calls used             {self.calls}",
+             ""]
+        if self.transferred:
+            L.append("  TRANSFERRED: the schema is better on this backend too")
+        elif getattr(self.paired, "underpowered", False):
+            L.append("  UNDERPOWERED: too few disagreements to decide")
+        else:
+            L.append("  DID NOT TRANSFER: no evidence it is better here")
+        return "\n".join(L)
+
+    def __str__(self) -> str:
+        return self.report()
