@@ -11,9 +11,9 @@ property. Most of them do not report it.
 """
 import random
 
-from jevolve import Policy, choice, evolve
-from jevolve.demo import INTENTS, tickets
-from jevolve.mutate import mutate_criteria_from_examples, mutate_threshold
+from jev_evolve import Policy, choice, evolve
+from jev_evolve.demo import INTENTS, tickets
+from jev_evolve.mutate import mutate_criteria_from_examples, mutate_threshold
 
 
 class Coinflip:

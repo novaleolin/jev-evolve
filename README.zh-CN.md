@@ -1,13 +1,13 @@
 <div align="center">
 
-# Jevolve：会自我进化、也知道哪些是噪声的 Agent
+# Jev-Evolve：会自我进化、也知道哪些是噪声的 Agent
 
 **用类型化决策代替生成文本；策略从 agent 自己的错误里进化；并且告诉你这次提升有多少只是运气。**
 
-[![PyPI](https://img.shields.io/pypi/v/jevolve?logo=pypi&logoColor=white)](https://pypi.org/project/jevolve/)
-[![Python](https://img.shields.io/pypi/pyversions/jevolve?logo=python&logoColor=white)](https://pypi.org/project/jevolve/)
+[![PyPI](https://img.shields.io/pypi/v/jev-evolve?logo=pypi&logoColor=white)](https://pypi.org/project/jev-evolve/)
+[![Python](https://img.shields.io/pypi/pyversions/jev-evolve?logo=python&logoColor=white)](https://pypi.org/project/jev-evolve/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/github/actions/workflow/status/novaleolin/jevolve/tests.yml?branch=main&label=tests&logo=github)](https://github.com/novaleolin/jevolve/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/novaleolin/jev-evolve/tests.yml?branch=main&label=tests&logo=github)](https://github.com/novaleolin/jev-evolve/actions)
 
 **[快速开始](#快速开始) · [空转实验](#大家都跳过的那一步) · [工作方式](#工作方式) · [API](#api) · [常见问题](#常见问题) · [English](README.md)**
 
@@ -15,7 +15,7 @@
 
 ---
 
-## Jevolve 是什么
+## Jev-Evolve 是什么
 
 一个 agent 框架，agent 走的每一个分支都是一个类型化问题：在这些选项里选一个、是或否、给一个分数。
 不是先生成一段文本，再由下游去解析。
@@ -36,16 +36,16 @@
 ## 快速开始
 
 ```bash
-pip install jevolve
+pip install jev-evolve
 python examples/quickstart.py     # 20 秒，无需 API key
 ```
 
 一个工单分流 agent，只有一个决策点，描述方式就是所有人一开始的写法：每个选项用它自己的名字当描述。
 
 ```python
-from jevolve import Policy, choice, evolve, run_policy
-from jevolve.demo import INTENTS, OverlapBackend, tickets
-from jevolve.mutate import mutate_criteria_from_errors, mutate_threshold
+from jev_evolve import Policy, choice, evolve, run_policy
+from jev_evolve.demo import INTENTS, OverlapBackend, tickets
+from jev_evolve.mutate import mutate_criteria_from_errors, mutate_threshold
 
 train, held = tickets(120, seed=1), tickets(120, seed=2)
 policy = Policy({"intent": choice(
@@ -98,7 +98,7 @@ python examples/null_loop.py
 在一个完全没有变好的 agent 上，报出的提升随代数增长。这不是本循环的 bug，
 而是"在多个带噪声的测量里取最大值"必然的结果，适用于每一个按评测分数做选择的自进化 agent。
 
-Jevolve 用两种方式处理它：打印下限，让你看到这个效应在自己场景下有多大；
+Jev-Evolve 用两种方式处理它：打印下限，让你看到这个效应在自己场景下有多大；
 以及把结论交给搜索从未碰过的 held-out 切分，用配对符号检验判定，
 所以一次运行被判为 `CREDIBLE` 时，依据一定不是选择能制造出来的。
 
@@ -113,7 +113,7 @@ Jevolve 用两种方式处理它：打印下限，让你看到这个效应在自
 以及低于多少置信度就弃权。四者都可搜索，其中三个是 prompt 优化器看不见的。
 
 ```python
-from jevolve import Policy, choice, noul
+from jev_evolve import Policy, choice, noul
 
 policy = Policy({
     "in_scope": noul("这是银行账户相关的问题吗？", threshold=0.6),
@@ -123,14 +123,14 @@ policy = Policy({
 ```
 
 **Agent（循环）。** 按顺序跑这些决策点。`act(state, answer)` 应用每个回答，你的工具调用写在这里。
-返回 `{jevolve.STOP: True}` 可以提前结束。
+返回 `{jev_evolve.STOP: True}` 可以提前结束。
 
 ```python
-from jevolve import Agent, RuleBackend
+from jev_evolve import Agent, RuleBackend
 
 def act(state, answer):
     if answer.name == "in_scope" and not answer:
-        return {jevolve.STOP: True, "outcome": "handoff"}
+        return {jev_evolve.STOP: True, "outcome": "handoff"}
     return {answer.name: answer.choice}
 
 episode = Agent(policy, backend, act=act).run("t1", {"text": "卡丢了"})
@@ -142,16 +142,16 @@ episode = Agent(policy, backend, act=act).run("t1", {"text": "卡丢了"})
 **Trace（轨迹）。** 每个决策、它的概率分布和耗时，存成 JSONL。自带四个读法：
 
 ```python
-jevolve.confusions(trace)       # (决策点, 选了什么, 本该选什么) -> 次数
-jevolve.point_accuracy(trace)   # 哪个决策点吃掉了大部分损失
-jevolve.overconfident(trace)    # 又错又自信，阈值救不了的那些
-jevolve.cost(trace)             # 每条样本的决策数与秒数
+jev_evolve.confusions(trace)       # (决策点, 选了什么, 本该选什么) -> 次数
+jev_evolve.point_accuracy(trace)   # 哪个决策点吃掉了大部分损失
+jev_evolve.overconfident(trace)    # 又错又自信，阈值救不了的那些
+jev_evolve.cost(trace)             # 每条样本的决策数与秒数
 ```
 
 **Evolve（进化）。** 一代代地生成变异体、打分、保留更好的。
 
 ```python
-from jevolve.mutate import default_operators
+from jev_evolve.mutate import default_operators
 
 ops = default_operators(available_fields=["text", "channel", "tier"],
                         examples_by_label=INTENTS, trace=trace)
@@ -184,12 +184,12 @@ res.best.save("policy.json")
 | 后端 | 是什么 | 成本 |
 | :--- | :--- | :--- |
 | `RuleBackend` | 一个 Python 函数。测试、基线、混合策略 | 免费 |
-| `OverlapBackend` | `jevolve.demo` 里的词重叠打分器。示例与 CI | 免费 |
+| `OverlapBackend` | `jev_evolve.demo` 里的词重叠打分器。示例与 CI | 免费 |
 | `LocalBackend` | 任意 causal LM 的选项 logits，一次 prefill，不生成 | 本地算力 |
 | `JevBackend` | 托管的类型化决策端点 | 按调用计费 |
 
-`LocalBackend` 需要 `pip install "jevolve[local]"`。其余部分不需要任何额外依赖，
-`import jevolve` 不会拉进任何模型库。
+`LocalBackend` 需要 `pip install "jev-evolve[local]"`。其余部分不需要任何额外依赖，
+`import jev_evolve` 不会拉进任何模型库。
 
 `JevBackend` 默认指向 OpenRouter 的 decisions API，传 `endpoint=` 可换成任何
 同样收 `{model, state, questions}` 的服务。包里其它地方都不知道背后是哪一家。
@@ -200,11 +200,11 @@ res.best.save("policy.json")
 ## API
 
 ```python
-from jevolve import Policy, Point, choice, noul       # 策略
-from jevolve import Agent, Answer, STOP               # 循环
-from jevolve import Trace, Episode, Decision          # 记录
-from jevolve import evolve, run_policy, Result        # 搜索
-from jevolve import confusions, point_accuracy, overconfident, cost
+from jev_evolve import Policy, Point, choice, noul       # 策略
+from jev_evolve import Agent, Answer, STOP               # 循环
+from jev_evolve import Trace, Episode, Decision          # 记录
+from jev_evolve import evolve, run_policy, Result        # 搜索
+from jev_evolve import confusions, point_accuracy, overconfident, cost
 
 evolve(policy, backend, tasks, score, operators,
        generations=20, candidates=4, heldout=None, act=None, seed=0)

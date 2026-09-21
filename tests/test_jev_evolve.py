@@ -4,15 +4,16 @@ Each one names a way the package could be quietly wrong and checks that it
 is not. The claim under attack is in the test name.
 """
 import json
+import os
 import random
 
 import pytest
 
-import jevolve
-from jevolve import Agent, Policy, choice, evolve, noul, run_policy
-from jevolve.demo import INTENTS, OverlapBackend, tickets
-from jevolve.backends import RuleBackend
-from jevolve.mutate import (default_operators, mutate_criteria_from_errors,
+import jev_evolve
+from jev_evolve import Agent, Policy, choice, evolve, noul, run_policy
+from jev_evolve.demo import INTENTS, OverlapBackend, tickets
+from jev_evolve.backends import RuleBackend
+from jev_evolve.mutate import (default_operators, mutate_criteria_from_errors,
                             mutate_order, mutate_state_fields,
                             mutate_threshold)
 
@@ -78,7 +79,7 @@ def test_the_floor_has_no_vote_on_the_verdict():
 def test_underpowered_is_not_reported_as_failure():
     """Five one-sided disagreements cannot reach p<0.05. Calling that a
     failure discards real improvements forever."""
-    from jevolve.evolve import _confirm
+    from jev_evolve.evolve import _confirm
     c = _confirm([0] * 5 + [1] * 50, [1] * 5 + [1] * 50)
     assert c.underpowered and not c.confirmed
 
@@ -140,14 +141,14 @@ def test_order_changes_what_later_points_see():
 def test_act_can_stop_an_episode_early():
     pol = Policy({"a": noul("q?"), "b": noul("q?"), "c": noul("q?")})
     ep = Agent(pol, RuleBackend(lambda s, n, q: 0.9),
-               act=lambda s, a: {jevolve.STOP: True}).run("t", {"text": "x"})
+               act=lambda s, a: {jev_evolve.STOP: True}).run("t", {"text": "x"})
     assert ep.n_decisions == 1
 
 
 def test_margin_is_top_minus_runner_up_not_top_alone():
     """A 0.51/0.49 decision and a 0.51/0.02/0.02... decision are not equally
     confident, and a loop that treats them alike mis-sorts its own errors."""
-    from jevolve.agent import Answer
+    from jev_evolve.agent import Answer
     assert Answer("x", probabilities={"a": 0.51, "b": 0.49}).margin == \
         pytest.approx(0.02)
     assert Answer("x", noul=0.5).margin == 0.0
@@ -159,7 +160,7 @@ def test_margin_is_top_minus_runner_up_not_top_alone():
 def test_confusions_point_at_the_pair_that_actually_cost():
     tr = run_policy(simple_policy(), OverlapBackend(seed=7), tickets(120, 1),
                     acc)
-    c = jevolve.confusions(tr)
+    c = jev_evolve.confusions(tr)
     assert c, "a policy at chance level must produce confusions"
     (point, pred, actual), n = c.most_common(1)[0]
     assert point == "intent" and pred != actual and n > 0
@@ -168,8 +169,8 @@ def test_confusions_point_at_the_pair_that_actually_cost():
 def test_default_gold_refuses_to_guess_attribution():
     """With two choice points the attribution is a guess, and a guessed
     attribution aims every later mutation at the wrong decision."""
-    from jevolve.analyze import default_gold
-    from jevolve.trace import Decision, Episode
+    from jev_evolve.analyze import default_gold
+    from jev_evolve.trace import Decision, Episode
     ep = Episode("t", [Decision(0, "a", "x", {"x": 1.0}),
                        Decision(1, "b", "y", {"y": 1.0})], label="x")
     assert default_gold(ep) == {}
@@ -190,7 +191,7 @@ def test_error_driven_mutation_only_touches_options_that_failed():
 def test_cost_is_reported_so_accuracy_cannot_be_bought_with_latency():
     tr = run_policy(simple_policy(), OverlapBackend(seed=1), tickets(30, 1),
                     acc)
-    c = jevolve.cost(tr)
+    c = jev_evolve.cost(tr)
     assert c["episodes"] == 30 and c["decisions_per_episode"] == 1.0
 
 
@@ -212,16 +213,16 @@ def test_a_trace_survives_a_round_trip_through_jsonl(tmp_path):
                     acc)
     f = tmp_path / "t.jsonl"
     tr.save(str(f))
-    back = jevolve.Trace.load(str(f))
+    back = jev_evolve.Trace.load(str(f))
     assert len(back) == 20
     assert back.score == pytest.approx(tr.score)
 
 
 def test_importing_jevolve_pulls_in_no_heavy_dependency():
-    """`import jevolve` must work with nothing installed but evalfloor."""
+    """`import jev_evolve` must work with nothing installed but evalfloor."""
     import subprocess
     import sys
-    code = ("import sys, jevolve; "
+    code = ("import sys, jev_evolve; "
             "assert not {'torch','transformers','numpy'} & set(sys.modules)")
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
 
@@ -232,3 +233,31 @@ def test_a_mutation_that_cannot_apply_returns_none_rather_than_a_copy():
     empty = Policy({"p": choice("q", {"a": "a"})})
     assert mutate_order()(empty, random.Random(0)) is None
     assert mutate_state_fields(["text"])(empty, random.Random(0)) is None
+
+
+def test_evolution_is_reproducible_across_processes():
+    """The in-process check above cannot see hash randomisation.
+
+    Set iteration over strings is ordered by per-process hashing, so an
+    operator that samples straight from a set gives two identical runs
+    different answers in different processes. That happened, and it is the
+    exact failure a library about reproducible gains cannot ship with.
+    """
+    import subprocess
+    import sys
+    code = (
+        "from jev_evolve import Policy, choice, evolve, run_policy;"
+        "from jev_evolve.demo import INTENTS, OverlapBackend, tickets;"
+        "from jev_evolve.mutate import mutate_criteria_from_errors,"
+        " mutate_threshold;"
+        "t=tickets(90,seed=1);b=OverlapBackend(seed=7);"
+        "s=lambda e: float(e.decisions[0].choice == e.label);"
+        "p=Policy({'intent': choice('q', {k: k for k in INTENTS})});"
+        "tr=run_policy(p,b,t,s);"
+        "r=evolve(p,b,t,s,[mutate_criteria_from_errors(tr),mutate_threshold()],"
+        "generations=8,candidates=3,seed=3,verbose=False);"
+        "print(round(r.best_score, 6))")
+    outs = {subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, env={**os.environ, "PYTHONHASHSEED": h}
+                           ).stdout.strip() for h in ("0", "1", "2")}
+    assert len(outs) == 1, f"run differed across hash seeds: {outs}"

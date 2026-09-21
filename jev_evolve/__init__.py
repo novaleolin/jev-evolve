@@ -1,4 +1,4 @@
-"""jevolve: agents whose decisions are typed, and whose policy evolves.
+"""jev_evolve: agents whose decisions are typed, and whose policy evolves.
 
 Three ideas, in the order you meet them:
 
@@ -36,7 +36,7 @@ __all__ = [
 def __getattr__(name):
     """`LocalBackend` needs torch, so it loads only when asked for.
 
-    Keeping it out of the eager imports is what lets `import jevolve` work in
+    Keeping it out of the eager imports is what lets `import jev_evolve` work in
     an environment with nothing installed but this package and evalfloor.
     """
     if name == "LocalBackend":

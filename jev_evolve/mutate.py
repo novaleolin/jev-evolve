@@ -248,7 +248,12 @@ def mutate_criteria_from_errors(trace: Trace, gold=None, k: int = 2) -> Mutation
         n, lab = rng.choice(live)
         out = p.copy()
         cur = out.points[n].question["criteria"][lab]
-        fresh = [x for x in set(pool[(n, lab)]) if f'"{x}"' not in cur]
+        # sorted(set(...)) rather than set(...): set iteration order over
+        # strings depends on per-process hash randomisation, so sampling
+        # straight from a set makes two identical runs disagree in different
+        # processes. A within-process reproducibility test cannot catch that.
+        seen = sorted(set(pool[(n, lab)]))
+        fresh = [x for x in seen if f'"{x}"' not in cur]
         if not fresh:
             return None
         picks = rng.sample(fresh, min(k, len(fresh)))

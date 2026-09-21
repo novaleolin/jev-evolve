@@ -1,7 +1,7 @@
 """A backend and a dataset that need nothing installed.
 
 Every example and every test in this package runs on these, so `pip install
-jevolve` is enough to see the whole loop work: no API key, no model download,
+jev_evolve` is enough to see the whole loop work: no API key, no model download,
 no network. They are demonstration devices and are not claimed to predict how
 any real model behaves.
 

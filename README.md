@@ -1,13 +1,13 @@
 <div align="center">
 
-# Jevolve: self-improving agents that know what's noise
+# Jev-Evolve: self-improving agents that know what's noise
 
 **Typed decisions instead of generated text. A policy that evolves from the agent's own mistakes. And a number telling you how much of the improvement was luck.**
 
-[![PyPI](https://img.shields.io/pypi/v/jevolve?logo=pypi&logoColor=white)](https://pypi.org/project/jevolve/)
-[![Python](https://img.shields.io/pypi/pyversions/jevolve?logo=python&logoColor=white)](https://pypi.org/project/jevolve/)
+[![PyPI](https://img.shields.io/pypi/v/jev-evolve?logo=pypi&logoColor=white)](https://pypi.org/project/jev-evolve/)
+[![Python](https://img.shields.io/pypi/pyversions/jev-evolve?logo=python&logoColor=white)](https://pypi.org/project/jev-evolve/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/github/actions/workflow/status/novaleolin/jevolve/tests.yml?branch=main&label=tests&logo=github)](https://github.com/novaleolin/jevolve/actions)
+[![Tests](https://img.shields.io/github/actions/workflow/status/novaleolin/jev-evolve/tests.yml?branch=main&label=tests&logo=github)](https://github.com/novaleolin/jev-evolve/actions)
 
 **[Quickstart](#quickstart) · [The null loop](#the-part-everyone-skips) · [How it works](#how-it-works) · [API](#api) · [FAQ](#faq) · [简体中文](README.zh-CN.md)**
 
@@ -15,7 +15,7 @@
 
 ---
 
-## What is Jevolve?
+## What is Jev-Evolve?
 
 An agent framework where every branch the agent takes is a typed question:
 pick one of these options, yes or no, score this. Not generated text that
@@ -40,7 +40,7 @@ would have produced on an agent that never got better.
 ## Quickstart
 
 ```bash
-pip install jevolve
+pip install jev-evolve
 python examples/quickstart.py     # 20 seconds, no API key, no downloads
 ```
 
@@ -48,9 +48,9 @@ A ticket triage agent with one decision point, described the way everyone
 describes it first: each option labelled with its own name.
 
 ```python
-from jevolve import Policy, choice, evolve, run_policy
-from jevolve.demo import INTENTS, OverlapBackend, tickets
-from jevolve.mutate import mutate_criteria_from_errors, mutate_threshold
+from jev_evolve import Policy, choice, evolve, run_policy
+from jev_evolve.demo import INTENTS, OverlapBackend, tickets
+from jev_evolve.mutate import mutate_criteria_from_errors, mutate_threshold
 
 train, held = tickets(120, seed=1), tickets(120, seed=2)
 policy = Policy({"intent": choice(
@@ -108,7 +108,7 @@ not improving at all. This is not a bug in this loop. It is what happens
 whenever you keep the best of several noisy measurements, and it applies to
 every self-improving agent that selects on an eval score.
 
-Jevolve handles it in two ways. It prints the floor, so you can see the size
+Jev-Evolve handles it in two ways. It prints the floor, so you can see the size
 of the effect for your own setup. And it decides the verdict on a held-out
 split the search never touched, using a paired sign test, so a run is
 `CREDIBLE` only on evidence that selection could not have manufactured.
@@ -127,7 +127,7 @@ threshold below which it abstains. All four are searchable. Three of them
 are invisible to a prompt optimiser.
 
 ```python
-from jevolve import Policy, choice, noul
+from jev_evolve import Policy, choice, noul
 
 policy = Policy({
     "in_scope": noul("Is this about a bank account?", threshold=0.6),
@@ -137,14 +137,14 @@ policy = Policy({
 ```
 
 **Agent.** A loop over those points. `act(state, answer)` applies each answer
-and is where your tools live. Return `{jevolve.STOP: True}` to finish early.
+and is where your tools live. Return `{jev_evolve.STOP: True}` to finish early.
 
 ```python
-from jevolve import Agent, RuleBackend
+from jev_evolve import Agent, RuleBackend
 
 def act(state, answer):
     if answer.name == "in_scope" and not answer:
-        return {jevolve.STOP: True, "outcome": "handoff"}
+        return {jev_evolve.STOP: True, "outcome": "handoff"}
     return {answer.name: answer.choice}
 
 episode = Agent(policy, backend, act=act).run("t1", {"text": "lost my card"})
@@ -158,16 +158,16 @@ worth sorting your errors by.
 Three readers come with it:
 
 ```python
-jevolve.confusions(trace)       # (point, picked, should have been) -> count
-jevolve.point_accuracy(trace)   # which decision point owns the loss
-jevolve.overconfident(trace)    # wrong and sure, the ones thresholds can't catch
-jevolve.cost(trace)             # decisions and seconds per episode
+jev_evolve.confusions(trace)       # (point, picked, should have been) -> count
+jev_evolve.point_accuracy(trace)   # which decision point owns the loss
+jev_evolve.overconfident(trace)    # wrong and sure, the ones thresholds can't catch
+jev_evolve.cost(trace)             # decisions and seconds per episode
 ```
 
 **Evolve.** Generations of mutants, scored, with the best kept.
 
 ```python
-from jevolve.mutate import default_operators
+from jev_evolve.mutate import default_operators
 
 ops = default_operators(available_fields=["text", "channel", "tier"],
                         examples_by_label=INTENTS, trace=trace)
@@ -202,18 +202,18 @@ never a budget reason to skip the check.
 ## Backends
 
 ```python
-from jevolve import RuleBackend, JevBackend
+from jev_evolve import RuleBackend, JevBackend
 ```
 
 | backend | what it is | cost |
 | :--- | :--- | :--- |
 | `RuleBackend` | a Python function. Tests, baselines, hybrid policies | free |
-| `OverlapBackend` | `jevolve.demo`, answers by word overlap. Examples and CI | free |
+| `OverlapBackend` | `jev_evolve.demo`, answers by word overlap. Examples and CI | free |
 | `LocalBackend` | option logits from any causal LM, one prefill, no generation | local GPU |
 | `JevBackend` | a hosted typed-decision endpoint | per call |
 
-`LocalBackend` needs `pip install "jevolve[local]"`. Everything else in the
-package works with no extra dependency, and `import jevolve` pulls in no
+`LocalBackend` needs `pip install "jev-evolve[local]"`. Everything else in the
+package works with no extra dependency, and `import jev_evolve` pulls in no
 model library.
 
 `JevBackend` defaults to the OpenRouter decisions API and takes `endpoint=`
@@ -228,11 +228,11 @@ keeps you on the right side of that, and it is also much cheaper.
 ## API
 
 ```python
-from jevolve import Policy, Point, choice, noul       # the policy
-from jevolve import Agent, Answer, STOP               # the loop
-from jevolve import Trace, Episode, Decision          # the record
-from jevolve import evolve, run_policy, Result        # the search
-from jevolve import confusions, point_accuracy, overconfident, cost
+from jev_evolve import Policy, Point, choice, noul       # the policy
+from jev_evolve import Agent, Answer, STOP               # the loop
+from jev_evolve import Trace, Episode, Decision          # the record
+from jev_evolve import evolve, run_policy, Result        # the search
+from jev_evolve import confusions, point_accuracy, overconfident, cost
 
 evolve(policy, backend, tasks, score, operators,
        generations=20, candidates=4, heldout=None, act=None, seed=0)

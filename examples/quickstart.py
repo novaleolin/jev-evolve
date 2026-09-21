@@ -8,10 +8,10 @@ name, which tells the model nothing the label did not already say. It then
 evolves that policy against its own mistakes and reports how much of the
 improvement survives data the search never ran on.
 """
-import jevolve
-from jevolve import choice, evolve, Policy
-from jevolve.demo import INTENTS, OverlapBackend, tickets
-from jevolve.mutate import (mutate_criteria_from_errors,
+import jev_evolve
+from jev_evolve import choice, evolve, Policy
+from jev_evolve.demo import INTENTS, OverlapBackend, tickets
+from jev_evolve.mutate import (mutate_criteria_from_errors,
                             mutate_criteria_from_examples, mutate_state_fields,
                             mutate_threshold)
 
@@ -34,9 +34,9 @@ def score(ep):
 # Two of these operators read the agent's own trace, which is why the trace
 # exists. The first generation is run before any of them fire, so the errors
 # they draw from are real ones the agent made under this exact policy.
-base = jevolve.run_policy(policy, backend, train, score)
+base = jev_evolve.run_policy(policy, backend, train, score)
 print(f"  starting accuracy {base.score:.3f}")
-print(f"  worst confusions   {jevolve.confusions(base).most_common(3)}\n")
+print(f"  worst confusions   {jev_evolve.confusions(base).most_common(3)}\n")
 
 ops = [
     mutate_criteria_from_errors(base),

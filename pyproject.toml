@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jevolve"
+name = "jev-evolve"
 version = "0.1.0"
 description = "Self-evolving agents whose every decision is a typed question, with an honest report of how much of the improvement is selection noise"
 readme = "README.md"
@@ -38,12 +38,12 @@ local = ["torch", "transformers"]
 dev = ["pytest"]
 
 [project.urls]
-Homepage = "https://github.com/novaleolin/jevolve"
-Source = "https://github.com/novaleolin/jevolve"
-Issues = "https://github.com/novaleolin/jevolve/issues"
+Homepage = "https://github.com/novaleolin/jev-evolve"
+Source = "https://github.com/novaleolin/jev-evolve"
+Issues = "https://github.com/novaleolin/jev-evolve/issues"
 
 [tool.setuptools.packages.find]
-include = ["jevolve*"]
+include = ["jev_evolve*"]
 
 [tool.setuptools.package-data]
-jevolve = ["py.typed"]
+jev_evolve = ["py.typed"]
