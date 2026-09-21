@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jevolve"
+version = "0.1.0"
+description = "Self-evolving agents whose every decision is a typed question, with an honest report of how much of the improvement is selection noise"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "novaleolin" }]
+keywords = [
+  "agent", "llm", "jev", "typesafe", "system-one", "typed-decisions",
+  "self-improving", "self-evolving", "prompt-optimization", "evaluation",
+  "selection-bias", "agent-framework",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["evalfloor>=0.3.0"]
+
+[project.optional-dependencies]
+local = ["torch", "transformers"]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/novaleolin/jevolve"
+Source = "https://github.com/novaleolin/jevolve"
+Issues = "https://github.com/novaleolin/jevolve/issues"
+
+[tool.setuptools.packages.find]
+include = ["jevolve*"]
+
+[tool.setuptools.package-data]
+jevolve = ["py.typed"]
