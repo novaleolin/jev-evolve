@@ -299,3 +299,82 @@ def test_transfer_reports_no_floor_because_nothing_is_selected():
                                      tickets(30, 2), acc)
     assert not hasattr(t, "floor")
     assert t.gain == 0.0 and not t.transferred
+
+
+# ------------------------------------------------------------- invariance
+
+
+def test_the_sensitivity_control_separates_order_from_noise():
+    """Without a fixed-order control, every source of nondeterminism gets
+    blamed on option order. OverlapBackend is noisy and does not read
+    position at all, so its excess must be ~0 however much it flips."""
+    pol = simple_policy()
+    s = jev_evolve.permutation_sensitivity(pol, OverlapBackend(seed=1),
+                                           tickets(96, seed=2), acc, k=4)
+    assert s.flips > 0 and s.control_flips > 0
+    assert s.excess_flip_rate < 0.05
+    assert s.sound
+
+
+def test_a_backend_that_only_reads_position_is_caught():
+    """The check has to fire on the thing it exists for."""
+    class FirstOption:
+        def decide(self, state, questions):
+            out = {}
+            for n, q in questions.items():
+                opts = list((q.get("criteria") or {}).keys())
+                probs = {k: (0.9 if i == 0 else 0.1 / max(1, len(opts) - 1))
+                         for i, k in enumerate(opts)}
+                out[n] = {"probabilities": probs, "choice": opts[0]}
+            return out
+
+    s = jev_evolve.permutation_sensitivity(simple_policy(), FirstOption(),
+                                           tickets(60, seed=2), acc, k=4)
+    assert s.control_flips == 0, "a deterministic backend cannot flip on its own"
+    assert s.excess_flip_rate > 0.5 and not s.sound
+
+
+def test_marginalized_costs_k_calls_and_stays_normalised():
+    """It is a k-times-cost fix, and downstream thresholds need the averaged
+    probabilities to still sum to one."""
+    calls = {"n": 0}
+    inner = OverlapBackend(seed=1)
+
+    class Counting:
+        def decide(self, state, questions):
+            calls["n"] += 1
+            return inner.decide(state, questions)
+
+    m = jev_evolve.Marginalized(Counting(), k=4)
+    out = m.decide({"text": "my card was declined"},
+                   simple_policy().points["intent"].question and
+                   {"intent": simple_policy().points["intent"].question})
+    assert calls["n"] == 4
+    assert abs(sum(out["intent"]["probabilities"].values()) - 1.0) < 1e-9
+
+
+def test_marginalizing_a_position_only_backend_flattens_it():
+    """Averaging over orderings must remove the position signal, not hide it."""
+    class FirstOption:
+        def decide(self, state, questions):
+            out = {}
+            for n, q in questions.items():
+                opts = list((q.get("criteria") or {}).keys())
+                probs = {k: (0.9 if i == 0 else 0.1 / max(1, len(opts) - 1))
+                         for i, k in enumerate(opts)}
+                out[n] = {"probabilities": probs, "choice": opts[0]}
+            return out
+
+    m = jev_evolve.Marginalized(FirstOption(), k=24, seed=1)
+    q = {"intent": simple_policy().points["intent"].question}
+    probs = m.decide({"text": "x"}, q)["intent"]["probabilities"]
+    assert max(probs.values()) - min(probs.values()) < 0.25
+
+
+def test_option_order_mutation_actually_reorders():
+    from jev_evolve.mutate import mutate_option_order
+    before = simple_policy()
+    after = mutate_option_order()(before, random.Random(0))
+    b = list(before.points["intent"].question["criteria"])
+    a = list(after.points["intent"].question["criteria"])
+    assert a != b and sorted(a) == sorted(b)

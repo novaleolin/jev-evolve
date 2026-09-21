@@ -19,6 +19,7 @@ from .agent import STOP, Agent, Answer
 from .analyze import confusions, cost, overconfident, point_accuracy
 from .backends import JevBackend, RuleBackend
 from .evolve import Result, Transfer, evolve, run_policy, validate_transfer
+from .invariance import Marginalized, Sensitivity, permutation_sensitivity
 from .mutate import default_operators
 from .policy import Point, Policy, choice, noul
 from .trace import Decision, Episode, Trace
@@ -31,6 +32,7 @@ __all__ = [
     "evolve", "run_policy", "Result", "default_operators",
     "validate_transfer", "Transfer",
     "confusions", "point_accuracy", "overconfident", "cost",
+    "permutation_sensitivity", "Sensitivity", "Marginalized",
 ]
 
 

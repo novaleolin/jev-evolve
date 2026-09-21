@@ -147,6 +147,41 @@ def mutate_order() -> Mutation:
     return op
 
 
+def mutate_option_order() -> Mutation:
+    """Permute the options of one choice point.
+
+    Measured worth on an 8-option task: the same schema scored 0.260 under
+    one ordering and 0.521 averaged over two, while every text operator in
+    this module found nothing at all on the same run. Option order is not a
+    presentation detail, it is the largest single dimension of the search,
+    and it was missing.
+
+    Searching over it is the cheap response. `Marginalized` is the better
+    one, because it removes the dependence rather than finding the ordering
+    that happens to exploit it, and an ordering selected on a training split
+    is exactly the kind of gain the selection floor exists to catch.
+    """
+    def op(p: Policy, rng: random.Random):
+        live = [n for n, pt in p.points.items() if len(pt.options) > 1]
+        if not live:
+            return None
+        out = p.copy()
+        n = rng.choice(live)
+        crit = out.points[n].question["criteria"]
+        keys = list(crit)
+        shuffled = keys[:]
+        for _ in range(8):
+            rng.shuffle(shuffled)
+            if shuffled != keys:
+                break
+        else:
+            return None
+        out.points[n].question["criteria"] = {k: crit[k] for k in shuffled}
+        out.note = f"order:{n} options permuted"
+        return out
+    return op
+
+
 def mutate_criteria_from_examples(examples_by_label, k=2) -> Mutation:
     """Describe an option using real inputs that belong to it.
 
@@ -165,10 +200,17 @@ def mutate_criteria_from_examples(examples_by_label, k=2) -> Mutation:
         out = p.copy()
         n, lab = rng.choice(cands)
         pool = examples_by_label[lab]
-        picks = rng.sample(pool, min(k, len(pool)))
-        new = "Examples: " + " | ".join(f'"{x}"' for x in picks)
-        if new == out.points[n].question["criteria"][lab]:
+        cur = out.points[n].question["criteria"][lab]
+        fresh = [x for x in sorted(set(pool)) if f'"{x}"' not in cur]
+        if not fresh:
             return None
+        picks = rng.sample(fresh, min(k, len(fresh)))
+        add = " | ".join(f'"{x}"' for x in picks)
+        # Append. An earlier version replaced the criteria outright, which is
+        # harmless when the starting text is the label name repeated back but
+        # destroys a real hand-written rule, and in a measured run every such
+        # candidate scored below the baseline it was mutating.
+        new = (cur + " Examples: " if cur else "Examples: ") + add
         out.points[n].question["criteria"][lab] = new
         out.note = f"examples:{lab}"
         return out
@@ -270,6 +312,55 @@ def mutate_criteria_from_errors(trace: Trace, gold=None, k: int = 2) -> Mutation
     return op
 
 
+def mutate_threshold_from_trace(trace: Trace, n_levels: int = 8) -> Mutation:
+    """Move a threshold, with the grid read off what the backend actually says.
+
+    The fixed grid in `mutate_threshold` is wrong for most backends, and it is
+    wrong in both directions at once. Measured on an 8-option task, a 0.5B
+    local model put its top probability between 0.28 and 0.59 for the middle
+    eighty percent of decisions. Against that, every grid value at or below
+    0.2 was the same no-op, and every value at or above 0.5 abstained on four
+    decisions in five and scored near zero. Two of eleven grid points did
+    anything at all, and in a 15-generation run a third of the candidate
+    slots went to values that could not have helped.
+
+    The fix is not a better constant. It is to build the grid from the
+    quantiles of the top probabilities the backend produced on this task, so
+    an 8-way choice and a 2-way noul get different grids, as they should, and
+    a differently calibrated model gets a grid that fits it.
+    """
+    tops: list[dict] = []
+    for ep in trace:
+        for d in ep.decisions:
+            if d.probabilities:
+                tops.append({"point": d.question,
+                             "p": max(d.probabilities.values())})
+    by: dict = {}
+    for row in tops:
+        by.setdefault(row["point"], []).append(row["p"])
+    grids = {}
+    for point, ps in by.items():
+        ps.sort()
+        qs = sorted({round(ps[min(len(ps) - 1, int(len(ps) * (i + 1)
+                                                  / (n_levels + 1)))], 3)
+                     for i in range(n_levels)})
+        grids[point] = [0.0] + qs
+
+    def op(p: Policy, rng: random.Random):
+        live = [n for n in p.points if grids.get(n)]
+        if not live:
+            return None
+        n = rng.choice(live)
+        out = p.copy()
+        opts = [g for g in grids[n] if g != out.points[n].threshold]
+        if not opts:
+            return None
+        out.points[n].threshold = rng.choice(opts)
+        out.note = f"threshold:{n}={out.points[n].threshold}"
+        return out
+    return op
+
+
 def default_operators(available_fields: list[str] | None = None,
                       examples_by_label: dict | None = None,
                       trace: Trace | None = None,
@@ -280,7 +371,9 @@ def default_operators(available_fields: list[str] | None = None,
     With nothing but a policy you still get threshold and order search, which
     runs offline, needs no LLM, and is frequently where the gain is.
     """
-    ops: list[Mutation] = [mutate_threshold(), mutate_order()]
+    ops: list[Mutation] = [mutate_order(), mutate_option_order()]
+    ops.append(mutate_threshold_from_trace(trace) if trace is not None
+               and len(trace) else mutate_threshold())
     if available_fields:
         ops.append(mutate_state_fields(available_fields))
     if examples_by_label:

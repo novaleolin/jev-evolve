@@ -1,0 +1,27 @@
+{
+  "order": [
+    "intent"
+  ],
+  "note": "",
+  "parent": "",
+  "points": {
+    "intent": {
+      "question": {
+        "type": "choice",
+        "instructions": "Which intent matches the customer message?",
+        "criteria": {
+          "card_arrival": "The customer is asking where a card they ordered is, or when it will arrive.",
+          "card_delivery_estimate": "The customer asks how long delivery takes in general, not about one specific order.",
+          "card_not_working": "A card the customer already holds is being rejected or will not work.",
+          "card_payment_fee_charged": "The customer was charged a fee on a card payment and is asking why.",
+          "declined_card_payment": "A specific card payment was declined and the customer wants to know the reason.",
+          "lost_or_stolen_card": "The customer reports a card lost or stolen, or suspects theft.",
+          "pending_card_payment": "A card payment is showing as pending or has not settled.",
+          "card_swallowed": "An ATM or machine physically retained the customer's card."
+        }
+      },
+      "threshold": 0.0,
+      "state_fields": null
+    }
+  }
+}

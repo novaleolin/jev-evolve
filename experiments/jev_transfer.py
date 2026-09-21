@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from jev_evolve import Policy, choice, evolve, run_policy
 from jev_evolve.mutate import (mutate_criteria_from_errors,
                                mutate_criteria_from_examples,
-                               mutate_state_fields, mutate_threshold)
+                               mutate_threshold_from_trace)
 
 INTENTS = ["card_arrival", "card_delivery_estimate", "card_not_working",
            "card_payment_fee_charged", "declined_card_payment",
@@ -99,10 +99,12 @@ def stage1_offline(args):
         print(f"    confuses {pred} for {act}  x{c}")
     print()
 
+    # The threshold grid is read off this backend's own confidences. A fixed
+    # grid spent a third of the candidate slots on values that were either
+    # no-ops or abstained on four decisions in five; see the operator.
     ops = [mutate_criteria_from_errors(trace),
            mutate_criteria_from_examples(pool),
-           mutate_threshold(),
-           mutate_state_fields(["customer_message"])]
+           mutate_threshold_from_trace(trace)]
     res = evolve(policy, backend, train, score, ops,
                  generations=args.generations, candidates=args.candidates,
                  heldout=held, seed=args.seed)
