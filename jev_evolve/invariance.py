@@ -207,3 +207,132 @@ class Marginalized:
         for name, vs in nouls.items():
             out[name] = {"noul": sum(vs) / len(vs)}
         return out
+
+
+# ------------------------------------------------- irrelevant state
+
+
+@dataclass
+class StateSensitivity:
+    """How much the answer moved when irrelevant fields were added."""
+
+    n: int
+    k: int
+    flips: int
+    control_flips: int = 0
+    base_score: float = 0.0
+    padded_scores: list = field(default_factory=list)
+
+    @property
+    def flip_rate(self) -> float:
+        return self.flips / self.n if self.n else 0.0
+
+    @property
+    def noise_rate(self) -> float:
+        return self.control_flips / self.n if self.n else 0.0
+
+    @property
+    def excess_flip_rate(self) -> float:
+        return max(0.0, self.flip_rate - self.noise_rate)
+
+    @property
+    def padded_score(self) -> float:
+        """Mean accuracy across the padded runs."""
+        if not self.padded_scores:
+            return 0.0
+        return sum(self.padded_scores) / len(self.padded_scores)
+
+    @property
+    def cost(self) -> float:
+        """Accuracy lost to the padding. Positive means the padding hurt."""
+        return self.base_score - self.padded_score
+
+    @property
+    def sound(self) -> bool:
+        return self.excess_flip_rate < 0.1
+
+    def report(self) -> str:
+        L = [f"  padded variants tried    {self.k}"
+             f"   (plus {self.k} unpadded controls)",
+             f"  answers that changed     {self.flips}/{self.n}"
+             f"   ({self.flip_rate:.1%})",
+             f"    of which noise alone   {self.control_flips}/{self.n}"
+             f"   ({self.noise_rate:.1%})",
+             f"    attributable to padding {self.excess_flip_rate:.1%}",
+             f"  accuracy, clean          {self.base_score:.3f}",
+             f"  accuracy, padded         {self.padded_score:.3f}"
+             f"   ({-self.cost:+.3f})", ""]
+        if self.sound:
+            L.append("  ROBUST: irrelevant state is not moving the answer")
+        else:
+            L.append("  STATE-SENSITIVE: fields that cannot bear on this decision")
+            L.append("  are changing it. Narrow the point's state_fields, or")
+            L.append("  search over them with mutate_state_fields.")
+        return "\n".join(L)
+
+    def __str__(self) -> str:
+        return self.report()
+
+
+#: Plausible-looking fields that cannot bear on a decision about the text.
+#: Real-looking on purpose: a decision model that ignores obvious filler may
+#: still be moved by something that reads like a business field.
+DISTRACTORS = {
+    "session_id": "a7f3c9e2-4b18-4d55-9c01-6e2f8ab31d94",
+    "locale": "en-GB",
+    "client_version": "4.11.2",
+    "ab_bucket": "control",
+    "referrer": "app/home/cards",
+    "queue_depth": "37",
+    "agent_shift": "evening",
+    "last_login_days": "3",
+}
+
+
+def state_sensitivity(policy: Policy, backend: Backend, tasks: Sequence,
+                      score=None, k: int = 4, fields: int = 3,
+                      distractors: dict | None = None, seed: int = 0,
+                      act=None, route=None) -> StateSensitivity:
+    """Add irrelevant fields to the state and see whether the answer moves.
+
+    Practitioners report that typed decision models follow complex rules
+    poorly out of a long context, which makes what goes into the state a real
+    design decision rather than a formatting one. This is the same shape of
+    check as `permutation_sensitivity`, against the same kind of control: k
+    padded runs and k unpadded ones, with the verdict on the excess.
+
+    The padding is drawn from fields that read like real business metadata,
+    because a model that shrugs off obvious filler can still be moved by
+    something that looks like it belongs.
+    """
+    from .evolve import run_policy
+
+    pool = list((distractors or DISTRACTORS).items())
+    sc = score or (lambda e: 0.0)
+    rng = random.Random(seed)
+
+    def pad(tasks_, extra):
+        out = []
+        for t in tasks_:
+            if isinstance(t, dict):
+                tid, st, lab = t.get("id"), t["state"], t.get("label")
+            else:
+                tid, st, lab = t[0], t[1], (t[2] if len(t) > 2 else None)
+            out.append((tid, dict(st, **extra), lab))
+        return out
+
+    padded, ctrl = [], []
+    for _ in range(k):
+        extra = dict(rng.sample(pool, min(fields, len(pool))))
+        padded.append(run_policy(policy, backend, pad(tasks, extra), sc,
+                                 act, route))
+        ctrl.append(run_policy(policy, backend, tasks, sc, act, route))
+
+    def flips(runs):
+        return sum(int(len({tuple(d.choice for d in r.episodes[i].decisions)
+                            for r in runs}) > 1) for i in range(len(tasks)))
+
+    return StateSensitivity(
+        n=len(tasks), k=k, flips=flips(padded), control_flips=flips(ctrl),
+        base_score=ctrl[0].score if score else 0.0,
+        padded_scores=[r.score for r in padded] if score else [])

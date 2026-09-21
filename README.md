@@ -136,6 +136,60 @@ selecting anything and beats the luckiest ordering in the set.
 That is the argument for fixing a bias rather than tuning around it, on one
 schema, with numbers.
 
+### Order dependence grows with the option set
+
+Practitioners report that a typed decision model's label boundaries get
+unstable as the candidate set grows while small candidate sets stay
+reliable. Much of that instability is the ordering, and it is fixable.
+`python experiments/option_count.py`:
+
+| options | n | decided by order | as written | marginalized k=8 |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 24 | 41.7% | 0.625 | 0.667 (+0.042) |
+| 3 | 36 | 47.2% | 0.722 | 0.806 (+0.083) |
+| 4 | 48 | 62.5% | 0.646 | **0.833 (+0.188)** |
+| 6 | 72 | 95.8% | 0.514 | **0.792 (+0.278)** |
+| 8 | 96 | 100.0% | 0.458 | 0.635 (+0.177) |
+
+![order dependence against the number of options](docs/options.png)
+
+Read the table down the "decided by order" column and across each row. Do not
+read the accuracy columns down: every row is a different task over a
+different label subset, with a different chance level and a different `n`, so
+accuracies are not comparable between rows. The 2-option row rests on 24
+items and its flip rate is roughly estimated.
+
+What the numbers support is narrow and useful: the share of answers decided
+by option order rises monotonically with the option set, and the value of
+marginalizing rises with it.
+
+### Irrelevant state moves the answer too
+
+Option order is one invariance. Here is a second, and the same control
+applies. `state_sensitivity` adds fields that cannot bear on the decision,
+drawn from things that read like real business metadata (`session_id`,
+`ab_bucket`, `queue_depth`, `agent_shift`) rather than obvious filler,
+because a model that shrugs off obvious filler can still be moved by
+something that looks like it belongs.
+
+Three such fields, on the same 8-option schema:
+
+```
+  answers that changed     30/96   (31.2%)
+    of which noise alone   0/96   (0.0%)
+    attributable to padding 31.2%
+  accuracy, clean          0.458
+  accuracy, padded         0.391   (-0.068)
+
+  STATE-SENSITIVE
+```
+
+Three irrelevant fields moved 31% of the answers and cost 6.8 accuracy
+points, with the control at zero. That is the practitioner complaint about
+long contexts, reproduced at three extra fields rather than a long prompt,
+and it is why `mutate_state_fields` searches over what each decision point
+can see instead of leaving it to a design review.
+
 ## Why typed decisions, and why a fast one
 
 ### The search space exists because the decisions are typed
@@ -337,7 +391,8 @@ and keeping the best would reintroduce selection, and the floor with it.
 
 ```python
 from jev_evolve import Policy, Point, choice, noul       # the policy
-from jev_evolve import permutation_sensitivity, Marginalized, Sensitivity
+from jev_evolve import permutation_sensitivity, state_sensitivity
+from jev_evolve import Marginalized, Sensitivity, StateSensitivity
 from jev_evolve import Agent, Answer, STOP               # the loop
 from jev_evolve import Trace, Episode, Decision          # the record
 from jev_evolve import evolve, run_policy, Result        # the search
@@ -346,6 +401,9 @@ from jev_evolve import confusions, point_accuracy, overconfident, cost
 
 permutation_sensitivity(policy, backend, tasks, score, k=4)
 # -> Sensitivity: .flip_rate .noise_rate .excess_flip_rate .sound .report()
+
+state_sensitivity(policy, backend, tasks, score, k=4, fields=3)
+# -> StateSensitivity: .excess_flip_rate .cost .sound .report()
 
 evolve(policy, backend, tasks, score, operators,
        generations=20, candidates=4, heldout=None, act=None, seed=0)
@@ -360,11 +418,10 @@ A task is `(id, state, label)` or `{"id":..., "state":..., "label":...}`.
 
 ## Limits
 
-`permutation_sensitivity` covers option order. It is the invariance that
-turned out to dominate here, and it is not the only one a typed decision can
-violate: state field order, option naming and irrelevant state are all
-untested by this check, and a schema it calls STABLE may still be measuring
-one of them.
+`permutation_sensitivity` covers option order and `state_sensitivity` covers
+irrelevant fields. They are not the only invariances a typed decision can
+violate: state field order and option naming are both untested, and a schema
+that passes both checks may still be measuring one of those.
 
 The reported floor assumes candidates are evaluated independently on a 0/1
 metric. Candidates in an evolutionary loop are correlated by descent, which

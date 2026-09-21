@@ -378,3 +378,48 @@ def test_option_order_mutation_actually_reorders():
     b = list(before.points["intent"].question["criteria"])
     a = list(after.points["intent"].question["criteria"])
     assert a != b and sorted(a) == sorted(b)
+
+
+def test_state_sensitivity_has_the_same_control_discipline():
+    """Padding is tested the same way ordering is: against unpadded runs, so
+    a noisy backend is not accused of reading the padding."""
+    s = jev_evolve.state_sensitivity(simple_policy(), OverlapBackend(seed=1),
+                                     tickets(96, seed=2), acc, k=4)
+    assert s.control_flips > 0
+    assert s.excess_flip_rate < 0.1 and s.sound
+
+
+def test_a_backend_that_reads_the_padding_is_caught():
+    class ReadsEverything:
+        """Answers from whichever option name shares a token with the state,
+        so an added field with a colliding token changes the answer."""
+
+        def decide(self, state, questions):
+            blob = " ".join(str(v) for v in state.values()).lower()
+            out = {}
+            for n, q in questions.items():
+                opts = list((q.get("criteria") or {}).keys())
+                pick = next((o for o in opts
+                             if any(w in blob for w in o.split("_"))), opts[0])
+                probs = {o: (0.9 if o == pick else 0.1 / max(1, len(opts) - 1))
+                         for o in opts}
+                out[n] = {"probabilities": probs, "choice": pick}
+            return out
+
+    distract = {"note_lost": "card", "note_top": "up", "x": "exchange"}
+    s = jev_evolve.state_sensitivity(simple_policy(), ReadsEverything(),
+                                     tickets(60, seed=2), acc, k=4, fields=2,
+                                     distractors=distract)
+    assert s.control_flips == 0
+    assert s.excess_flip_rate > 0.0
+
+
+def test_padding_never_touches_the_caller_s_tasks():
+    """A check that mutated the caller's data would quietly corrupt every
+    later measurement in the same process."""
+    tasks = tickets(20, seed=2)
+    before = [dict(s) for _i, s, _l in tasks]
+    jev_evolve.state_sensitivity(simple_policy(), OverlapBackend(seed=1),
+                                 tasks, acc, k=2)
+    after = [s for _i, s, _l in tasks]
+    assert before == after
