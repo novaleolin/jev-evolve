@@ -190,6 +190,76 @@ long contexts, reproduced at three extra fields rather than a long prompt,
 and it is why `mutate_state_fields` searches over what each decision point
 can see instead of leaving it to a design review.
 
+### A third invariance, this one about content
+
+The two checks above are about formatting. A practitioner report pointed at
+something else: these models get pulled toward the most vivid event in the
+input and miss the responsible party, the root cause or the precondition.
+That is a claim about content, so it needs a different probe, and it needs a
+control that separates capture from ordinary degradation.
+
+`salience_sensitivity` builds a contrast set. Every item is a real banking77
+utterance of intent A. Its twin prepends a real utterance of a different
+intent B, quoted and marked as already resolved, with the gold label kept at
+A: what happened last month and was settled does not change where today's
+request is routed. Then it asks one question. Of the answers the injection
+broke, how many landed on B?
+
+Extra text can simply degrade a decision, and then the new errors spread
+across the wrong labels. Capture concentrates them on B. The baseline is not
+the theoretical 1/(m-1) but the model's own rate for the B label among its
+unperturbed errors, because a model with a favourite label beats the
+theoretical level on every label and would look captured.
+
+Same 8-option schema, ordering marginalized first so the effect is not read
+off order noise, 192 pairs (`python experiments/salience_probe.py`):
+
+```
+  accuracy, clean          0.620
+  accuracy, distractor in  0.495   (-0.125)
+  answers it broke         29   (and 5 it happened to fix)
+    landed on the distractor  19   (65.5%)
+    this model's own rate     15.1%   (73 clean errors)
+    -> 4.3x   p=1.04e-09
+
+  CAPTURED
+```
+
+The matched control sits at 15.1%, next to the theoretical 14.3%, so the
+model has no special appetite for the labels that were drawn as distractors.
+The concentration is the injection.
+
+### And the two obvious fixes both make it worse
+
+A finding like that invites two responses, and both were tested, cheap one
+first (`python experiments/decomposition.py`):
+
+| arm | accuracy | captured | vs baseline | decisions/item |
+| :--- | ---: | ---: | :--- | ---: |
+| A baseline, as written | **0.495** | 56.7% | | 1 |
+| B one instruction: ignore resolved matters | 0.438 | 48.1% | 5 fixed / 16 broken, **p=0.027 worse** | 1 |
+| C a separate typed gate, then a routed intent question | 0.422 | 44.1% | 7 fixed / 21 broken, **p=0.013 worse** | 2 |
+
+The gate in arm C was right on 160 of 192 items, so this is not a broken
+gate. Capture fell monotonically across the arms, so both interventions hit
+what they aimed at. They cost more than they saved, and the state check above
+says why: on this model, adding text to the context is itself expensive.
+The fix for a content bias is more instruction, and more instruction is the
+thing this model handles badly. That tension is real, it is measured, and
+this library does not paper over it by shipping arm C as a feature.
+
+```python
+from jev_evolve import salience_sensitivity, quote_prior
+
+s = salience_sensitivity(policy, backend, tasks,
+                         quote_prior("text", examples_by_label), score)
+print(s.report())      # .share .matched_control .ratio .p_value .captured
+```
+
+`inject(state, label, rng) -> (new_state, distractor_label)` is yours and
+must preserve the gold label; `quote_prior` is the ready-made one for text
+classification.
+
 ## Why typed decisions, and why a fast one
 
 ### The search space exists because the decisions are typed
@@ -391,7 +461,7 @@ and keeping the best would reintroduce selection, and the floor with it.
 
 ```python
 from jev_evolve import Policy, Point, choice, noul       # the policy
-from jev_evolve import permutation_sensitivity, state_sensitivity
+from jev_evolve import permutation_sensitivity, state_sensitivity, salience_sensitivity, quote_prior
 from jev_evolve import Marginalized, Sensitivity, StateSensitivity
 from jev_evolve import Agent, Answer, STOP               # the loop
 from jev_evolve import Trace, Episode, Decision          # the record
@@ -404,6 +474,9 @@ permutation_sensitivity(policy, backend, tasks, score, k=4)
 
 state_sensitivity(policy, backend, tasks, score, k=4, fields=3)
 # -> StateSensitivity: .excess_flip_rate .cost .sound .report()
+
+salience_sensitivity(policy, backend, tasks, inject, score)
+# -> SalienceSensitivity: .share .matched_control .ratio .p_value .captured
 
 evolve(policy, backend, tasks, score, operators,
        generations=20, candidates=4, heldout=None, act=None, seed=0)
@@ -418,10 +491,14 @@ A task is `(id, state, label)` or `{"id":..., "state":..., "label":...}`.
 
 ## Limits
 
-`permutation_sensitivity` covers option order and `state_sensitivity` covers
-irrelevant fields. They are not the only invariances a typed decision can
-violate: state field order and option naming are both untested, and a schema
-that passes both checks may still be measuring one of those.
+`permutation_sensitivity` covers option order, `state_sensitivity` covers
+irrelevant fields and `salience_sensitivity` covers capture by a vivid
+distractor. State field order and option naming are still untested, and a
+schema that passes all three may still be measuring one of those. The
+salience probe's gold labels are preserved by construction, not by human
+annotation, and its demo-backend result is mechanically trivial (a
+bag-of-words scorer fed a whole sentence of label B); the evidence is the
+Qwen2.5-0.5B run, which is not a bag of words.
 
 The reported floor assumes candidates are evaluated independently on a 0/1
 metric. Candidates in an evolutionary loop are correlated by descent, which
