@@ -107,7 +107,10 @@ def main(args):
         w, td, share = capture_rate(list(trace), distractor)
         rows.append({"arm": name, "accuracy": trace.score, "wrong": w,
                      "to_distractor": td, "capture_share": share,
-                     "decisions_per_item": decisions_per_item})
+                     "decisions_per_item": decisions_per_item,
+                     # per-item hits, so "B is worse than A" can be a paired
+                     # test rather than two averages eyeballed side by side
+                     "hits": [int(round(e.outcome or 0.0)) for e in trace]})
         print(f"  {name:28s} acc {trace.score:.3f}"
               f"   captured {td}/{w} ({share:.1%})"
               f"   {decisions_per_item:.2f} decisions/item")
@@ -132,6 +135,29 @@ def main(args):
                    for e in tr)
     print(f"\n  gate said 'a resolved prior is present' on {gate_yes}/{len(tr)}"
           f" items; every perturbed item has one")
+
+    # Two averages differing is not a result. Compare each arm to the
+    # baseline on the same items, which is what confirm() is for.
+    from jev_evolve.evolve import _confirm
+    print()
+    for r in rows[1:]:
+        c = _confirm(rows[0]["hits"], r["hits"])
+        # confirm() is one-sided for "the new arm is better", so a significant
+        # result in the other direction must be named as such: the first run
+        # of this script printed p=0.0266 with 5 fixed / 16 broken as "not
+        # distinguishable", which is the opposite of what the numbers say.
+        if c.confirmed:
+            verdict = "better than the baseline"
+        elif getattr(c, "underpowered", False):
+            verdict = "underpowered"
+        elif c.p_value < 0.05 and c.losses > c.wins:
+            verdict = "WORSE than the baseline"
+        else:
+            verdict = "not distinguishable from the baseline"
+        print(f"  {r['arm']:28s} vs baseline: {c.wins} fixed / {c.losses}"
+              f" broken   p={c.p_value:.4f}   {verdict}")
+        r["vs_baseline"] = {"wins": c.wins, "losses": c.losses,
+                            "p": c.p_value}
 
     with open(args.results, "w") as f:
         json.dump({"k": args.k, "n": len(pert), "gate_yes": gate_yes,
